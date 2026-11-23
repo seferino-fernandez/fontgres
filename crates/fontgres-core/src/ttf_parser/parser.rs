@@ -87,19 +87,16 @@ impl<'a, T: FromData> LazyArray16<'a, T> {
     /// Returns a value at `index`.
     #[inline]
     pub(crate) fn get(&self, index: u16) -> Option<T> {
-        if index < self.len() {
-            let start = usize::from(index) * T::SIZE;
-            let end = start + T::SIZE;
-            self.data.get(start..end).and_then(T::parse)
-        } else {
-            None
-        }
+        self.data
+            .chunks_exact(T::SIZE)
+            .nth(usize::from(index))
+            .and_then(T::parse)
     }
 
     /// Returns array's length.
     #[inline]
     pub(crate) fn len(&self) -> u16 {
-        u16::try_from(self.data.len() / T::SIZE).unwrap_or(u16::MAX)
+        u16::try_from(self.data.chunks_exact(T::SIZE).len()).unwrap_or(u16::MAX)
     }
 
     /// Performs a binary search using specified closure.
@@ -117,16 +114,16 @@ impl<'a, T: FromData> LazyArray16<'a, T> {
             return None;
         }
 
-        let mut base = 0;
+        let mut base: u16 = 0;
         while size > 1 {
             let half = size / 2;
-            let mid = base + half;
+            let mid = base.checked_add(half)?;
             // mid is always in [0, size), that means mid is >= 0 and < size.
             // mid >= 0: by definition
             // mid < size: mid = size / 2 + size / 4 + size / 8 ...
             let cmp = f(&self.get(mid)?);
             base = if cmp == Ordering::Greater { base } else { mid };
-            size -= half;
+            size = size.checked_sub(half)?;
         }
 
         // base is always in [0, size) because base <= mid.
@@ -164,8 +161,9 @@ impl<T: FromData> Iterator for LazyArrayIter16<'_, T> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.index += 1; // TODO: check
-        self.data.get(self.index - 1)
+        let value = self.data.get(self.index)?;
+        self.index = self.index.checked_add(1)?;
+        Some(value)
     }
 
     #[inline]
@@ -212,16 +210,20 @@ impl<'a> Stream<'a> {
 
     /// Advances by the specified `len`.
     ///
-    /// Doesn't check bounds.
+    /// Doesn't check bounds: past the end, every later read returns `None`.
     #[inline]
     pub(super) fn advance(&mut self, len: usize) {
-        self.offset += len;
+        self.offset = self.offset.saturating_add(len);
     }
 
     /// Advances by the specified `len` and checks for bounds.
     #[inline]
     pub(super) fn advance_checked(&mut self, len: usize) -> Option<()> {
-        if self.offset + len <= self.data.len() {
+        if self
+            .offset
+            .checked_add(len)
+            .is_some_and(|end| end <= self.data.len())
+        {
             self.advance(len);
             Some(())
         } else {
@@ -241,18 +243,15 @@ impl<'a> Stream<'a> {
     /// Parses the type from the steam at offset.
     #[inline]
     pub(super) fn read_at<T: FromData>(data: &[u8], offset: usize) -> Option<T> {
-        data.get(offset..offset + T::SIZE).and_then(T::parse)
+        data.get(offset..offset.checked_add(T::SIZE)?)
+            .and_then(T::parse)
     }
 
     /// Reads N bytes from the stream.
     #[inline]
     pub(super) fn read_bytes(&mut self, len: usize) -> Option<&'a [u8]> {
-        // An integer overflow here on 32bit systems is almost guarantee to be caused
-        // by an incorrect parsing logic from the caller side.
-        // Simply using `checked_add` here would silently swallow errors, which is not what we want.
-        debug_assert!(u32::try_from(self.offset as u64 + len as u64).is_ok());
-
-        let v = self.data.get(self.offset..self.offset + len)?;
+        let end = self.offset.checked_add(len)?;
+        let v = self.data.get(self.offset..end)?;
         self.advance(len);
         Some(v)
     }
@@ -260,7 +259,7 @@ impl<'a> Stream<'a> {
     /// Reads the next `count` types as a slice.
     #[inline]
     pub(super) fn read_array16<T: FromData>(&mut self, count: u16) -> Option<LazyArray16<'a, T>> {
-        let len = usize::from(count) * T::SIZE;
+        let len = usize::from(count).checked_mul(T::SIZE)?;
         self.read_bytes(len).map(LazyArray16::new)
     }
 }
@@ -308,5 +307,79 @@ impl FromData for Offset32 {
     #[inline]
     fn parse(data: &[u8]) -> Option<Self> {
         u32::parse(data).map(Offset32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::{LazyArray16, Stream};
+
+    const WORDS: &[u8] = &[0x00, 0x01, 0x00, 0x05, 0x00, 0x09, 0xFF];
+
+    #[test]
+    fn a_lazy_array_reads_whole_values_only() {
+        let array = LazyArray16::<u16>::new(WORDS);
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.get(0), Some(1));
+        assert_eq!(array.get(2), Some(9));
+        assert_eq!(array.get(3), None);
+        assert_eq!(array.get(u16::MAX), None);
+    }
+
+    #[test]
+    fn a_lazy_array_iterates_its_values_then_stops() {
+        let mut values = LazyArray16::<u16>::new(WORDS).into_iter();
+        assert_eq!(values.count(), 3);
+        assert_eq!(values.by_ref().collect::<Vec<_>>(), [1, 5, 9]);
+        assert_eq!(values.next(), None);
+        assert_eq!(values.next(), None);
+    }
+
+    #[test]
+    fn a_binary_search_finds_only_present_values() {
+        let array = LazyArray16::<u16>::new(WORDS);
+        for (index, value) in [(0, 1), (1, 5), (2, 9)] {
+            assert_eq!(
+                array.binary_search_by(|v| v.cmp(&value)),
+                Some((index, value))
+            );
+        }
+        for missing in [0, 4, 10] {
+            assert_eq!(array.binary_search_by(|v| v.cmp(&missing)), None);
+        }
+        assert_eq!(
+            LazyArray16::<u16>::new(&[]).binary_search_by(|v| v.cmp(&1)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_read_that_overflows_the_offset_fails() {
+        let mut stream = Stream::new(WORDS);
+        assert_eq!(stream.read::<u16>(), Some(1));
+        assert_eq!(stream.read_bytes(usize::MAX), None);
+        assert!(stream.read_array16::<u16>(u16::MAX).is_none());
+        assert_eq!(Stream::read_at::<u16>(WORDS, usize::MAX), None);
+        assert_eq!(stream.advance_checked(usize::MAX), None);
+        assert_eq!(stream.offset(), 2);
+    }
+
+    #[test]
+    fn reads_past_an_advance_beyond_the_end_fail() {
+        let mut stream = Stream::new(WORDS);
+        stream.advance(usize::MAX);
+        stream.advance(1);
+        assert_eq!(stream.read::<u16>(), None);
+        assert_eq!(stream.tail(), None);
+    }
+
+    #[test]
+    fn advance_checked_allows_reaching_the_end_exactly() {
+        let mut stream = Stream::new(WORDS);
+        assert_eq!(stream.advance_checked(WORDS.len()), Some(()));
+        assert_eq!(stream.tail(), Some(&[][..]));
+        assert_eq!(stream.advance_checked(1), None);
     }
 }

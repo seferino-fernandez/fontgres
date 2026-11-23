@@ -142,9 +142,11 @@ impl<'a> RawFace<'a> {
                 return Err(FaceParsingError::FaceIndexOutOfBounds);
             }
             // `index < number_of_faces`, so the offset lies within `offsets`.
-            let face_offset =
-                Stream::read_at::<Offset32>(offsets, usize::num_from(index) * Offset32::SIZE)
-                    .ok_or(FaceParsingError::MalformedFont)?;
+            let (offsets, _) = offsets.as_chunks::<{ Offset32::SIZE }>();
+            let face_offset = offsets
+                .get(usize::num_from(index))
+                .map(|&bytes| Offset32(u32::from_be_bytes(bytes)))
+                .ok_or(FaceParsingError::MalformedFont)?;
             // Face offset is from the start of the font data,
             // so we have to adjust it to the current parser offset.
             let face_offset = face_offset

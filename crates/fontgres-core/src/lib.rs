@@ -374,7 +374,8 @@ impl Database {
         }
 
         if seen.is_empty() && file_type.is_dir() {
-            seen.reserve(8192 / size_of::<std::path::PathBuf>());
+            const CAPACITY: usize = 8192 / size_of::<std::path::PathBuf>();
+            seen.reserve(CAPACITY);
 
             for (_, info) in &self.faces {
                 let loaded = match &info.source {
@@ -1297,9 +1298,7 @@ fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Langu
         }
     }
 
-    if families.is_empty() {
-        return None;
-    }
+    let (first_family, _) = families.first()?;
 
     // A font without a PostScript name still loads, with one made from its
     // family as fontconfig makes it.
@@ -1310,7 +1309,7 @@ fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Langu
             name.id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
         })
         .and_then(|name| name_to_unicode(&name))
-        .unwrap_or_else(|| postscript_name::from_family(&families[0].0));
+        .unwrap_or_else(|| postscript_name::from_family(first_family));
 
     Some((families, post_script_name))
 }
@@ -1353,10 +1352,11 @@ fn name_to_unicode(name: &ttf_parser::name::Name<'_>) -> Option<String> {
         String::from_utf16(&raw_data).ok()
     } else if name.is_mac_roman() {
         // We support only MacRoman encoding here, which should be enough in most cases.
-        let mut raw_data = Vec::with_capacity(name.data.len());
-        for b in name.data {
-            raw_data.push(MAC_ROMAN[*b as usize]);
-        }
+        let raw_data: Vec<u16> = name
+            .data
+            .iter()
+            .map(|&byte| mac_roman_to_utf16(byte))
+            .collect();
 
         String::from_utf16(&raw_data).ok()
     } else {
@@ -1515,6 +1515,15 @@ fn nearest<'a>(
             .min_by_key(|face| key(face).abs_diff(target))
     };
     closest_on(lower_first).or_else(|| closest_on(!lower_first))
+}
+
+/// Returns the UTF-16 code unit for a Macintosh Roman byte.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "MAC_ROMAN has 256 entries, one per u8 value, so every byte indexes it"
+)]
+fn mac_roman_to_utf16(byte: u8) -> u16 {
+    MAC_ROMAN[usize::from(byte)]
 }
 
 /// Macintosh Roman to UTF-16 encoding table.
