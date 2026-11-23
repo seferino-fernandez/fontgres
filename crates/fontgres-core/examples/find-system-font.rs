@@ -1,5 +1,6 @@
 //! Loads the system fonts and times a query.
 
+#[cfg(feature = "fs")]
 use fontgres_core as fontdb;
 
 #[cfg(not(feature = "fs"))]

@@ -217,6 +217,8 @@ pub(crate) fn fonts_in_collection(data: &[u8]) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::{FaceParsingError, RawFace};
 
     /// A face with no tables: the TrueType magic, `numTables = 0` and the

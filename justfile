@@ -7,6 +7,7 @@ verify:
 	cargo fmt --all --check
 	cargo check --locked --workspace
 	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+	just lint-features
 	just test
 	just doc
 	cargo deny check
@@ -43,6 +44,12 @@ doc:
 # Lint the code with Clippy, failing on any warning
 lint:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+# Lint fontgres-core with its optional features off: no_std, std only, and std with fs but no memmap
+lint-features:
+	cargo clippy --locked -p fontgres-core --all-targets --no-default-features -- -D warnings
+	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std -- -D warnings
+	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std,fs -- -D warnings
 
 # Format code with rustfmt and apply Clippy's auto-fixable suggestions
 format:

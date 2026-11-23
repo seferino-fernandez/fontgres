@@ -1116,6 +1116,13 @@ where
 }
 
 impl Source {
+    #[cfg_attr(
+        not(feature = "fs"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "without the fs feature every source is in memory and always has data; with it, a file can fail to read"
+        )
+    )]
     fn with_data<P, T>(&self, p: P) -> Option<T>
     where
         P: FnOnce(&[u8]) -> T,
