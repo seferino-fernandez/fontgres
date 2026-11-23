@@ -82,7 +82,6 @@ unused_lifetimes = "warn"
 missing_copy_implementations = "warn"
 missing_debug_implementations = "warn"
 # fontdb import: relaxed until the lint cleanup.
-elided_lifetimes_in_paths = "allow"
 unreachable_pub = "warn"
 unused_qualifications = "warn"
 
@@ -109,10 +108,10 @@ cognitive_complexity = "warn"
 exit = "warn"
 infinite_loop = "warn"
 print_stderr = "warn"
-print_stdout = "allow"  # fontdb import
+print_stdout = "warn"
 redundant_clone = "warn"
-shadow_unrelated = "allow"  # fontdb import
-wildcard_enum_match_arm = "allow"  # fontdb import
+shadow_unrelated = "warn"
+wildcard_enum_match_arm = "warn"
 
 # Prevent panics from unwraps and unsafe slicing or indexing
 arithmetic_side_effects = "allow"  # fontdb import
@@ -126,12 +125,12 @@ todo = "warn"
 unimplemented = "warn"
 unreachable = "warn"
 unwrap_in_result = "warn"
-unwrap_used = "allow"  # fontdb import
+unwrap_used = "warn"
 
 # Prevent dropped futures and swallowed errors
 assertions_on_result_states = "warn"
-let_underscore_must_use = "allow"  # fontdb import
-map_err_ignore = "allow"  # fontdb import
+let_underscore_must_use = "warn"
+map_err_ignore = "warn"
 unused_result_ok = "warn"
 
 # Prevent unsafe things with memory
@@ -158,19 +157,4 @@ allow_attributes_without_reason = "warn"
 
 # fontdb import: pedantic lints the imported code fails, relaxed until the
 # lint cleanup.
-assert_is_empty = "allow"
-cast_possible_truncation = "allow"
-cast_precision_loss = "allow"
-copy_iterator = "allow"
-default_trait_access = "allow"
-excessive_nesting = "allow"
-get_first = "allow"
-items_after_statements = "allow"
-manual_let_else = "allow"
-match_same_arms = "allow"
-missing_errors_doc = "allow"
 needless_pass_by_value = "allow"
-struct_field_names = "allow"
-trivially_copy_pass_by_ref = "allow"
-unnested_or_patterns = "allow"
-unreadable_literal = "allow"

@@ -278,13 +278,7 @@ impl Database {
 
             for index in 0..n {
                 match parse_face_info(source.clone(), data, index) {
-                    Ok(mut info) => {
-                        let id = self.faces.insert_with_key(|k| {
-                            info.id = ID(k);
-                            info
-                        });
-                        ids.push(ID(id));
-                    }
+                    Ok(info) => ids.push(self.push_face_info(info)),
                     Err(e) => {
                         log::warn!("Failed to load a font face {index} from source cause {e}.");
                     }
@@ -357,7 +351,7 @@ impl Database {
     /// fails to parse, is skipped and logged as a warning.
     #[cfg(feature = "fs")]
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
-        self.load_fonts_dir_impl(dir.as_ref(), &mut Default::default());
+        self.load_fonts_dir_impl(dir.as_ref(), &mut std::collections::HashSet::new());
     }
 
     #[cfg(feature = "fs")]
@@ -383,13 +377,13 @@ impl Database {
             seen.reserve(8192 / size_of::<std::path::PathBuf>());
 
             for (_, info) in &self.faces {
-                let path = match &info.source {
+                let loaded = match &info.source {
                     Source::Binary(_) => continue,
-                    Source::File(path) => path.clone(),
+                    Source::File(loaded) => loaded.clone(),
                     #[cfg(feature = "memmap")]
-                    Source::SharedFile(path, _) => path.clone(),
+                    Source::SharedFile(loaded, _) => loaded.clone(),
                 };
-                seen.insert(path);
+                seen.insert(loaded);
             }
         }
 
@@ -413,9 +407,8 @@ impl Database {
         dir: &std::path::Path,
         seen: &mut std::collections::HashSet<std::path::PathBuf>,
     ) {
-        let fonts_dir = match std::fs::read_dir(dir) {
-            Ok(dir) => dir,
-            Err(_) => return,
+        let Ok(fonts_dir) = std::fs::read_dir(dir) else {
+            return;
         };
 
         for entry in fonts_dir.flatten() {
@@ -423,16 +416,13 @@ impl Database {
             // font extension: content-addressed stores link font names to
             // files named by hash.
             let link_is_font = has_font_extension(&entry.path());
-            let (path, file_type) = match self.canonicalize(entry.path(), entry, seen) {
-                Some(v) => v,
-                None => continue,
+            let Some((path, file_type)) = self.canonicalize(entry.path(), entry, seen) else {
+                continue;
             };
 
-            if file_type.is_file() {
-                if link_is_font || has_font_extension(&path) {
-                    if let Err(e) = self.load_font_file(&path) {
-                        log::warn!("Failed to load '{}' cause {}.", path.display(), e);
-                    }
+            if file_type.is_file() && (link_is_font || has_font_extension(&path)) {
+                if let Err(e) = self.load_font_file(&path) {
+                    log::warn!("Failed to load '{}' cause {}.", path.display(), e);
                 }
             } else if file_type.is_dir() {
                 self.load_fonts_dir_impl(&path, seen);
@@ -468,7 +458,7 @@ impl Database {
     pub fn load_system_fonts(&mut self) {
         #[cfg(target_os = "windows")]
         {
-            let mut seen = Default::default();
+            let mut seen = std::collections::HashSet::new();
             if let Some(ref system_root) = std::env::var_os("SYSTEMROOT") {
                 let system_root_path = std::path::Path::new(system_root);
                 self.load_fonts_dir_impl(&system_root_path.join("Fonts"), &mut seen);
@@ -491,24 +481,22 @@ impl Database {
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            let mut seen = Default::default();
+            let mut seen = std::collections::HashSet::new();
             self.load_fonts_dir_impl("/Library/Fonts".as_ref(), &mut seen);
             self.load_fonts_dir_impl("/System/Library/Fonts".as_ref(), &mut seen);
             // Downloadable fonts, location varies on major macOS releases
-            if let Ok(dir) = std::fs::read_dir("/System/Library/AssetsV2") {
-                for entry in dir {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(_) => continue,
-                    };
-                    if entry
+            let assets = std::fs::read_dir("/System/Library/AssetsV2")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| {
+                    entry
                         .file_name()
                         .to_string_lossy()
                         .starts_with("com_apple_MobileAsset_Font")
-                    {
-                        self.load_fonts_dir_impl(&entry.path(), &mut seen);
-                    }
-                }
+                });
+            for entry in assets {
+                self.load_fonts_dir_impl(&entry.path(), &mut seen);
             }
             self.load_fonts_dir_impl("/Network/Library/Fonts".as_ref(), &mut seen);
 
@@ -543,7 +531,7 @@ impl Database {
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
     fn load_no_fontconfig(&mut self) {
-        let mut seen = Default::default();
+        let mut seen = std::collections::HashSet::new();
         self.load_fonts_dir_impl("/usr/share/fonts/".as_ref(), &mut seen);
         self.load_fonts_dir_impl("/usr/local/share/fonts/".as_ref(), &mut seen);
 
@@ -567,7 +555,7 @@ impl Database {
         let home = std::env::var("HOME");
 
         if let Ok(ref config_file) = std::env::var("FONTCONFIG_FILE") {
-            let _ = fontconfig.merge_config(Path::new(config_file));
+            merge_fontconfig(&mut fontconfig, Path::new(config_file));
         } else {
             let xdg_config_home = if let Ok(val) = std::env::var("XDG_CONFIG_HOME") {
                 Some(val.into())
@@ -580,17 +568,15 @@ impl Database {
             };
 
             let read_global = match xdg_config_home {
-                Some(p) => fontconfig
-                    .merge_config(&p.join("fontconfig/fonts.conf"))
-                    .is_err(),
+                Some(p) => !merge_fontconfig(&mut fontconfig, &p.join("fontconfig/fonts.conf")),
                 None => true,
             };
 
             for dir in SYSTEM_FONTCONFIG_DIRS {
                 if read_global {
-                    let _ = fontconfig.merge_config(&Path::new(dir).join("local.conf"));
+                    merge_fontconfig(&mut fontconfig, &Path::new(dir).join("local.conf"));
                 }
-                let _ = fontconfig.merge_config(&Path::new(dir).join("fonts.conf"));
+                merge_fontconfig(&mut fontconfig, &Path::new(dir).join("fonts.conf"));
             }
         }
 
@@ -598,17 +584,12 @@ impl Database {
             log::warn!("Fallback to loading from known font dir paths.");
             self.load_no_fontconfig();
         } else {
-            let mut seen = Default::default();
-            for dir in core::mem::take(&mut fontconfig.dirs) {
-                let path = if dir.path.starts_with("~") {
-                    if let Ok(ref home) = home {
-                        Path::new(home).join(dir.path.strip_prefix("~").unwrap())
-                    } else {
-                        continue;
-                    }
-                } else {
-                    dir.path
-                };
+            let mut seen = std::collections::HashSet::new();
+            let home = home.as_ref().ok().map(Path::new);
+            let dirs = core::mem::take(&mut fontconfig.dirs)
+                .into_iter()
+                .filter_map(|dir| expand_home(dir.path, home));
+            for path in dirs {
                 self.load_fonts_dir_impl(&path, &mut seen);
             }
         }
@@ -731,7 +712,7 @@ impl Database {
     /// the family set by the matching `set_*_family` method, such as
     /// [`set_serif_family`](Database::set_serif_family), or to the default
     /// listed on [`Database::new`].
-    pub fn family_name<'a>(&'a self, family: &'a Family) -> &'a str {
+    pub fn family_name<'a>(&'a self, family: &'a Family<'_>) -> &'a str {
         match family {
             Family::Name(name) => name,
             Family::Serif => self.family_serif.as_str(),
@@ -768,7 +749,7 @@ impl Database {
     /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn query(&self, query: &Query) -> Option<ID> {
+    pub fn query(&self, query: &Query<'_>) -> Option<ID> {
         for family in query.families {
             let name = self.family_name(family);
             let candidates: Vec<_> = self
@@ -858,17 +839,14 @@ impl Database {
     /// matches no face, is left alone.
     #[cfg(all(feature = "fs", feature = "memmap"))]
     pub fn make_face_data_unshared(&mut self, id: ID) {
-        let face_info = match self.faces.get(id.0) {
-            Some(face_info) => face_info,
-            None => return,
+        let Some(face_info) = self.faces.get(id.0) else {
+            return;
         };
 
         let old_source = face_info.source.clone();
 
-        let shared_path = match old_source {
-            #[cfg(all(feature = "fs", feature = "memmap"))]
-            Source::SharedFile(path, _) => path,
-            _ => return,
+        let Source::SharedFile(shared_path, _) = old_source else {
+            return;
         };
 
         let new_source = Source::File(shared_path.clone());
@@ -1031,6 +1009,45 @@ const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts", "/usr/local/etc/fonts"];
     ))
 ))]
 const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts"];
+
+/// Returns `path` with a leading `~` replaced by `home`, or `None` when it
+/// has one and the home directory is unknown.
+#[cfg(all(
+    unix,
+    feature = "fontconfig",
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn expand_home(
+    path: std::path::PathBuf,
+    home: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    match path.strip_prefix("~") {
+        Ok(in_home) => Some(home?.join(in_home)),
+        Err(_) => Some(path),
+    }
+}
+
+/// Merges the fontconfig configuration file at `path` into `fontconfig` and
+/// returns whether it merged. A file that is missing or does not parse is
+/// skipped and logged at debug level, since most of the files fontconfig
+/// looks for are optional.
+#[cfg(all(
+    unix,
+    feature = "fontconfig",
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn merge_fontconfig(
+    fontconfig: &mut fontconfig_parser::FontConfig,
+    path: &std::path::Path,
+) -> bool {
+    match fontconfig.merge_config(path) {
+        Ok(()) => true,
+        Err(error) => {
+            log::debug!("Skipped fontconfig file '{}': {error}.", path.display());
+            false
+        }
+    }
+}
 
 /// Whether `path` ends in a font extension, `ttf`, `ttc`, `otf` or `otc`, in
 /// any case.
@@ -1231,7 +1248,10 @@ impl Default for Style {
 }
 
 fn parse_face_info(source: Source, data: &[u8], index: u32) -> Result<FaceInfo, LoadError> {
-    let raw_face = ttf_parser::RawFace::parse(data, index).map_err(|_| LoadError::MalformedFont)?;
+    let raw_face = ttf_parser::RawFace::parse(data, index).map_err(|error| {
+        log::debug!("Face {index} does not parse: {error:?}.");
+        LoadError::MalformedFont
+    })?;
     let (families, post_script_name) = parse_names(&raw_face).ok_or(LoadError::UnnamedFont)?;
     let (mut style, weight, stretch) = parse_os2(&raw_face);
     let (monospaced, italic) = parse_post(&raw_face);
@@ -1253,8 +1273,8 @@ fn parse_face_info(source: Source, data: &[u8], index: u32) -> Result<FaceInfo, 
     })
 }
 
-fn parse_names(raw_face: &ttf_parser::RawFace) -> Option<(Vec<(String, Language)>, String)> {
-    const NAME_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"name");
+fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Language)>, String)> {
+    const NAME_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"name");
     let name_data = raw_face.table(NAME_TAG)?;
     let name_table = ttf_parser::name::Table::parse(name_data)?;
 
@@ -1287,7 +1307,7 @@ fn parse_names(raw_face: &ttf_parser::RawFace) -> Option<(Vec<(String, Language)
         .names
         .into_iter()
         .find(|name| {
-            name.name_id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
+            name.id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
         })
         .and_then(|name| name_to_unicode(&name))
         .unwrap_or_else(|| postscript_name::from_family(&families[0].0));
@@ -1295,10 +1315,10 @@ fn parse_names(raw_face: &ttf_parser::RawFace) -> Option<(Vec<(String, Language)
     Some((families, post_script_name))
 }
 
-fn collect_families(name_id: u16, names: &ttf_parser::name::Names) -> Vec<(String, Language)> {
+fn collect_families(name_id: u16, names: &ttf_parser::name::Names<'_>) -> Vec<(String, Language)> {
     let mut families = Vec::new();
     for name in names.into_iter() {
-        if name.name_id == name_id && name.is_unicode() {
+        if name.id == name_id && name.is_unicode() {
             if let Some(family) = name_to_unicode(&name) {
                 families.push((family, name.language()));
             }
@@ -1311,7 +1331,7 @@ fn collect_families(name_id: u16, names: &ttf_parser::name::Names) -> Vec<(Strin
         .any(|f| f.1 == Language::English_UnitedStates)
     {
         for name in names.into_iter() {
-            if name.name_id == name_id && name.is_mac_roman() {
+            if name.id == name_id && name.is_mac_roman() {
                 if let Some(family) = name_to_unicode(&name) {
                     families.push((family, name.language()));
                     break;
@@ -1323,18 +1343,18 @@ fn collect_families(name_id: u16, names: &ttf_parser::name::Names) -> Vec<(Strin
     families
 }
 
-fn name_to_unicode(name: &ttf_parser::name::Name) -> Option<String> {
+fn name_to_unicode(name: &ttf_parser::name::Name<'_>) -> Option<String> {
     if name.is_unicode() {
         let mut raw_data: Vec<u16> = Vec::new();
-        for c in ttf_parser::LazyArray16::<u16>::new(name.name) {
+        for c in ttf_parser::LazyArray16::<u16>::new(name.data) {
             raw_data.push(c);
         }
 
         String::from_utf16(&raw_data).ok()
     } else if name.is_mac_roman() {
         // We support only MacRoman encoding here, which should be enough in most cases.
-        let mut raw_data = Vec::with_capacity(name.name.len());
-        for b in name.name {
+        let mut raw_data = Vec::with_capacity(name.data.len());
+        for b in name.data {
             raw_data.push(MAC_ROMAN[*b as usize]);
         }
 
@@ -1344,14 +1364,13 @@ fn name_to_unicode(name: &ttf_parser::name::Name) -> Option<String> {
     }
 }
 
-fn parse_os2(raw_face: &ttf_parser::RawFace) -> (Style, Weight, Stretch) {
-    const OS2_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"OS/2");
-    let table = match raw_face
+fn parse_os2(raw_face: &ttf_parser::RawFace<'_>) -> (Style, Weight, Stretch) {
+    const OS2_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"OS/2");
+    let Some(table) = raw_face
         .table(OS2_TAG)
         .and_then(ttf_parser::os2::Table::parse)
-    {
-        Some(table) => table,
-        None => return (Style::Normal, Weight::NORMAL, Stretch::Normal),
+    else {
+        return (Style::Normal, Weight::NORMAL, Stretch::Normal);
     };
 
     let style = match table.style() {
@@ -1366,14 +1385,13 @@ fn parse_os2(raw_face: &ttf_parser::RawFace) -> (Style, Weight, Stretch) {
     (style, Weight(weight.to_number()), stretch)
 }
 
-fn parse_post(raw_face: &ttf_parser::RawFace) -> (bool, bool) {
+fn parse_post(raw_face: &ttf_parser::RawFace<'_>) -> (bool, bool) {
     // We need just a single value from the `post` table, while ttf-parser will parse all.
     // Therefore we have a custom parser.
 
-    const POST_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"post");
-    let data = match raw_face.table(POST_TAG) {
-        Some(v) => v,
-        None => return (false, false),
+    const POST_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"post");
+    let Some(data) = raw_face.table(POST_TAG) else {
+        return (false, false);
     };
 
     // All we care about, it that u32 at offset 12 is non-zero.
@@ -1572,3 +1590,54 @@ pub use error::{ConfigError, Error};
 /// [`Error`] as the default error.
 #[cfg(feature = "cli")]
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+#[cfg(all(
+    test,
+    unix,
+    feature = "fontconfig",
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+mod fontconfig_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{expand_home, merge_fontconfig};
+
+    #[test]
+    fn a_leading_tilde_expands_to_the_home_directory() {
+        let home = Some(Path::new("/home/user"));
+        assert_eq!(
+            expand_home(PathBuf::from("~/fonts"), home),
+            Some(PathBuf::from("/home/user/fonts"))
+        );
+    }
+
+    #[test]
+    fn a_tilde_path_is_dropped_when_the_home_directory_is_unknown() {
+        assert_eq!(expand_home(PathBuf::from("~/fonts"), None), None);
+    }
+
+    #[test]
+    fn a_path_without_a_leading_tilde_is_kept() {
+        let path = PathBuf::from("/usr/share/fonts/~");
+        assert_eq!(expand_home(path.clone(), None), Some(path));
+    }
+
+    #[test]
+    fn a_configuration_file_merges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fonts.conf");
+        std::fs::write(&path, "<fontconfig><dir>/srv/fonts</dir></fontconfig>").unwrap();
+        let mut fontconfig = fontconfig_parser::FontConfig::default();
+        assert!(merge_fontconfig(&mut fontconfig, &path));
+        assert_eq!(fontconfig.dirs.len(), 1);
+    }
+
+    #[test]
+    fn a_missing_configuration_file_does_not_merge() {
+        let mut fontconfig = fontconfig_parser::FontConfig::default();
+        assert!(!merge_fontconfig(
+            &mut fontconfig,
+            Path::new("/nonexistent/fontconfig/fonts.conf")
+        ));
+    }
+}

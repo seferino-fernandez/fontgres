@@ -152,7 +152,7 @@ impl SelectionFlags {
 #[derive(Clone, Copy)]
 pub(crate) struct Table<'a> {
     /// Table version.
-    pub version: u8,
+    pub version: u16,
     data: &'a [u8],
 }
 
@@ -165,9 +165,7 @@ impl<'a> Table<'a> {
         let table_len = match version {
             0 => 78,
             1 => 86,
-            2 => 96,
-            3 => 96,
-            4 => 96,
+            2..=4 => 96,
             5 => 100,
             _ => return None,
         };
@@ -178,10 +176,7 @@ impl<'a> Table<'a> {
             return None;
         }
 
-        Some(Table {
-            version: version as u8,
-            data,
-        })
+        Some(Table { version, data })
     }
 
     /// Returns weight class.
@@ -198,11 +193,11 @@ impl<'a> Table<'a> {
             2 => Width::ExtraCondensed,
             3 => Width::Condensed,
             4 => Width::SemiCondensed,
-            5 => Width::Normal,
             6 => Width::SemiExpanded,
             7 => Width::Expanded,
             8 => Width::ExtraExpanded,
             9 => Width::UltraExpanded,
+            // 5, and the values the spec leaves undefined.
             _ => Width::Normal,
         }
     }

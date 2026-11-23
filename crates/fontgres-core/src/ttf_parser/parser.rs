@@ -99,7 +99,7 @@ impl<'a, T: FromData> LazyArray16<'a, T> {
     /// Returns array's length.
     #[inline]
     pub(crate) fn len(&self) -> u16 {
-        (self.data.len() / T::SIZE) as u16
+        u16::try_from(self.data.len() / T::SIZE).unwrap_or(u16::MAX)
     }
 
     /// Performs a binary search using specified closure.
