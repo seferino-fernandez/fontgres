@@ -675,15 +675,21 @@ mod tests {
         assert!(Config::default().log.level.is_none());
     }
 
+    /// Asserts that `err` is a [`ConfigError::FileNotFound`] and returns its
+    /// message.
+    fn file_not_found_message(err: Error) -> String {
+        let Error::Config(config @ ConfigError::FileNotFound { .. }) = err else {
+            panic!("expected ConfigError::FileNotFound, got {err:?}");
+        };
+        config.to_string()
+    }
+
     #[test]
     fn missing_explicit_config_file_errors_with_path() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("typo.toml");
         let err = load(&missing, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
-        let Error::Config(config @ ConfigError::FileNotFound { .. }) = err else {
-            panic!("expected ConfigError::FileNotFound, got {err:?}");
-        };
-        let message = config.to_string();
+        let message = file_not_found_message(err);
         assert_eq!(
             message,
             format!("config file {} does not exist", missing.display())
@@ -696,10 +702,7 @@ mod tests {
         let missing = directory.path().join("typo.toml");
         let env = MapEnv::new().with("FONTGRES_CONFIG", missing.to_string_lossy());
         let err = Config::load_with_env(None, &ConfigOverrides::default(), &env).unwrap_err();
-        let Error::Config(config @ ConfigError::FileNotFound { .. }) = err else {
-            panic!("expected ConfigError::FileNotFound, got {err:?}");
-        };
-        let message = config.to_string();
+        let message = file_not_found_message(err);
         assert_eq!(
             message,
             format!(
@@ -714,10 +717,7 @@ mod tests {
         let (_directory, path) = config_file("");
         let missing = path.join("x.toml");
         let err = load(&missing, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
-        let Error::Config(config @ ConfigError::FileNotFound { .. }) = err else {
-            panic!("expected ConfigError::FileNotFound, got {err:?}");
-        };
-        let message = config.to_string();
+        let message = file_not_found_message(err);
         assert!(
             message.contains(&missing.display().to_string()),
             "{message}"
