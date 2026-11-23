@@ -14,27 +14,10 @@ Restart it to pick up newly installed fonts.
 
 ## Install
 
-Prebuilt binaries for Linux, macOS and Windows (`x86_64` and `aarch64`) are attached
-to each [GitHub Release](https://github.com/seferino-fernandez/fontgres/releases).
-
-With Homebrew (macOS and Linux), which also installs shell completions and man pages:
-
-```shell
-brew tap seferino-fernandez/tools
-brew install fontgres-mcp
-```
-
-With cargo-binstall, which downloads the prebuilt binary:
-
-```shell
-cargo binstall fontgres-mcp
-```
-
-From source with cargo:
-
-```shell
-cargo install fontgres-mcp
-```
+`brew install seferino-fernandez/tools/fontgres-mcp` (Homebrew, with shell completions
+and man pages), `cargo binstall fontgres-mcp` (prebuilt binary) or
+`cargo install fontgres-mcp` (from source). Archives for Linux, macOS and Windows
+are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
 
 ## Transports
 

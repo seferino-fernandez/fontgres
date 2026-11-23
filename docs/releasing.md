@@ -48,22 +48,19 @@ published, so the workflow does not wait for one.
 | Secret | What it is | Used by |
 | --- | --- | --- |
 | `RELEASE_PLZ_TOKEN` | Fine-grained PAT on this repository with Contents and Pull requests read and write | Both release-plz jobs. Events from the default `GITHUB_TOKEN` start no workflows, so without a PAT neither validation on the release PR nor `release-binaries.yml` would run. |
-| `CARGO_REGISTRY_TOKEN` | crates.io API token with the `publish-new` and `publish-update` scopes | Release job, until trusted publishing is set up |
+| `CARGO_REGISTRY_TOKEN` | crates.io API token with the `publish-new` and `publish-update` scopes | Release job |
 | `HOMEBREW_TAP_TOKEN` | Fine-grained PAT on `seferino-fernandez/homebrew-tools` with Contents read and write | Tap update in `release-binaries.yml` |
 
-## Switching to crates.io trusted publishing
+## crates.io trusted publishing
 
-crates.io can publish a crate only with a token the first time. After 0.1.0 is
-out:
-
-1. On crates.io, open each of `fontgres-core`, `fontgres-cli` and
-   `fontgres-mcp`, go to Settings, then Trusted Publishing, and add a GitHub
-   publisher: owner `seferino-fernandez`, repository `fontgres`, workflow
-   `release-plz.yml`.
-2. Delete the `CARGO_REGISTRY_TOKEN` secret, then revoke the token on crates.io.
-
-The Release job already has `id-token: write`; with no token set, release-plz
-requests a short-lived one from crates.io.
+Publishing uses the `CARGO_REGISTRY_TOKEN` secret. crates.io trusted publishing
+cannot replace it while the Release job runs on `workflow_run`: crates.io
+refuses trusted-publishing tokens for runs started by `workflow_run` or
+`pull_request_target` (see `src/controllers/trustpub/tokens/exchange/mod.rs`
+in rust-lang/crates.io). Moving to trusted publishing needs a release job
+started by `push` that still waits for validation, plus a GitHub publisher
+(owner `seferino-fernandez`, repository `fontgres`, that workflow's file name)
+on each crate's crates.io settings.
 
 ## When something fails
 

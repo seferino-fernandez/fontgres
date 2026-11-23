@@ -5,27 +5,10 @@ Query the fonts on this machine from the terminal, built on
 
 ## Install
 
-Prebuilt binaries for Linux, macOS and Windows (`x86_64` and `aarch64`) are attached
-to each [GitHub Release](https://github.com/seferino-fernandez/fontgres/releases).
-
-With Homebrew (macOS and Linux), which also installs shell completions and man pages:
-
-```shell
-brew tap seferino-fernandez/tools
-brew install fontgres
-```
-
-With cargo-binstall, which downloads the prebuilt binary:
-
-```shell
-cargo binstall fontgres-cli
-```
-
-From source with cargo:
-
-```shell
-cargo install fontgres-cli
-```
+`brew install seferino-fernandez/tools/fontgres` (Homebrew, with shell completions
+and man pages), `cargo binstall fontgres-cli` (prebuilt binary) or
+`cargo install fontgres-cli` (from source). Archives for Linux, macOS and Windows
+are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
 
 ## Build
 
