@@ -2,6 +2,7 @@
 
 #![doc = include_str!("../README.md")]
 
+mod commands;
 mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -43,10 +44,24 @@ struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
+    /// Load fonts from this directory, scanned recursively (repeatable).
+    /// Replaces `[fonts] dirs` and `FONTGRES_FONTS_DIRS`.
+    #[arg(long = "font-dir", global = true, value_name = "DIR")]
+    font_dirs: Vec<PathBuf>,
+
+    /// Load this font file (repeatable). Replaces `[fonts] files` and
+    /// `FONTGRES_FONTS_FILES`.
+    #[arg(long = "font-file", global = true, value_name = "FILE")]
+    font_files: Vec<PathBuf>,
+
+    /// Do not load the fonts installed on this system.
+    #[arg(long, global = true)]
+    no_system_fonts: bool,
+
     /// Logging verbosity: `-v` warn, `-vv` info, `-vvv` debug, `-vvvv` trace;
     /// `-q` silences output. When passed, overrides `FONTGRES_LOG_LEVEL` and
     /// `[log] level`; with none of them set, only errors are reported. Place
-    /// before the subcommand: `fontgres -v status`. `RUST_LOG` overrides
+    /// before the subcommand: `fontgres -v faces`. `RUST_LOG` overrides
     /// everything.
     #[command(flatten)]
     verbosity: Verbosity,
@@ -54,6 +69,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List font faces.
+    Faces(commands::FacesArgs),
+    /// List font family names.
+    Families,
+    /// Find the face that best matches a CSS-like query.
+    Query(commands::QueryArgs),
     /// Generate a shell completion script (bash, elvish, fish, nushell,
     /// powershell, zsh).
     Completions {
@@ -111,8 +132,12 @@ fn try_main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let config = Config::load(cli.config.as_deref(), &ConfigOverrides::default())
-        .context("loading config")?;
+    let overrides = ConfigOverrides {
+        system: cli.no_system_fonts.then_some(false),
+        dirs: cli.font_dirs.clone(),
+        files: cli.font_files.clone(),
+    };
+    let config = Config::load(cli.config.as_deref(), &overrides).context("loading config")?;
 
     // Default level precedence: explicit `-v`/`-q` overrides config `log.level`,
     // which overrides `error`; `RUST_LOG` (via `try_from_default_env`) still
@@ -134,7 +159,11 @@ fn try_main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let database = config.fonts.build_database().context("loading fonts")?;
     match &cli.command {
+        Command::Faces(args) => commands::faces(&database, args, cli.output),
+        Command::Families => commands::families(&database, cli.output),
+        Command::Query(args) => commands::query(&database, args, cli.output),
         // Handled by the early returns above.
         Command::Completions { .. } | Command::Man { .. } => Ok(()),
     }

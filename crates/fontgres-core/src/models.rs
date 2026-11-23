@@ -225,10 +225,21 @@ fn family(name: &str) -> Family<'_> {
     }
 }
 
-/// Every face in `database`, sorted by family, then weight, style, stretch and
-/// `PostScript` name.
-pub fn faces(database: &Database) -> Vec<Face> {
-    let mut faces: Vec<Face> = database.faces().map(Face::from).collect();
+/// The faces in `database`, sorted by family, then weight, style, stretch and
+/// `PostScript` name. With `family`, only the faces that carry that family name
+/// in any language, compared case-insensitively.
+pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
+    let mut faces: Vec<Face> = database
+        .faces()
+        .filter(|info| {
+            family.is_none_or(|wanted| {
+                info.families
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            })
+        })
+        .map(Face::from)
+        .collect();
     faces.sort_by(|a, b| {
         a.family
             .cmp(&b.family)
@@ -325,7 +336,7 @@ mod tests {
     #[test]
     fn face_view_reads_the_face_info() {
         let database = tuffy_only().build_database().unwrap();
-        let faces = faces(&database);
+        let faces = faces(&database, None);
         assert_eq!(faces.len(), 1);
         let face = &faces[0];
         assert_eq!(face.family, "Tuffy");
@@ -347,13 +358,13 @@ mod tests {
     fn in_memory_faces_have_no_path() {
         let mut database = Database::new();
         database.load_font_data(std::fs::read(fonts_dir().join("Tuffy.ttf")).unwrap());
-        assert_eq!(faces(&database)[0].path, None);
+        assert_eq!(faces(&database, None)[0].path, None);
     }
 
     #[test]
     fn face_serializes_with_css_keywords() {
         let database = tuffy_only().build_database().unwrap();
-        let value = serde_json::to_value(&faces(&database)[0]).unwrap();
+        let value = serde_json::to_value(&faces(&database, None)[0]).unwrap();
         assert_eq!(value["style"], "normal");
         assert_eq!(value["stretch"], "normal");
         assert_eq!(
@@ -380,6 +391,13 @@ mod tests {
         ] {
             assert_eq!(FontStretch::from(Stretch::from(stretch)), stretch);
         }
+    }
+
+    #[test]
+    fn family_filter_ignores_case_and_drops_other_families() {
+        let database = tuffy_only().build_database().unwrap();
+        assert_eq!(faces(&database, Some("tUFFY")).len(), 1);
+        assert!(faces(&database, Some("Nope")).is_empty());
     }
 
     #[test]
