@@ -348,9 +348,22 @@ impl Database {
         // SAFETY: the mapping lives only for this call and the file is not kept
         // open afterwards; a concurrent change to the file during this call is
         // the inherent risk of mmap that upstream fontdb accepts.
-        let data: &[u8] = unsafe { &memmap2::MmapOptions::new().map(&file)? };
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        // Parsing a face reads a few KiB of tables (`name`, `OS/2`, `post`)
+        // spread over the file. With the default sequential readahead each page
+        // fault pulls a whole readahead window, up to 4 MiB on btrfs, so listing
+        // thousands of installed faces reads gigabytes. The hint only affects
+        // performance, so a failure is logged and ignored.
+        #[cfg(unix)]
+        if let Err(error) = mmap.advise(memmap2::Advice::Random) {
+            log::debug!(
+                "Failed to mark '{}' as random access: {}.",
+                path.display(),
+                error
+            );
+        }
 
-        self.load_fonts_from_file(path, data);
+        self.load_fonts_from_file(path, &mmap);
         Ok(())
     }
 
@@ -1072,9 +1085,18 @@ impl Source {
                 // SAFETY: the mapping lives only for this closure call and the file
                 // is not kept open afterwards; a concurrent change to the file during
                 // the call is the inherent risk of mmap that upstream fontdb accepts.
-                let data = unsafe { &memmap2::MmapOptions::new().map(&file).ok()? };
+                let mmap = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
+                // Random access, as in `Database::load_font_file`.
+                #[cfg(unix)]
+                if let Err(error) = mmap.advise(memmap2::Advice::Random) {
+                    log::debug!(
+                        "Failed to mark '{}' as random access: {}.",
+                        path.display(),
+                        error
+                    );
+                }
 
-                Some(p(data))
+                Some(p(&mmap))
             }
             Source::Binary(ref data) => Some(p(data.as_ref().as_ref())),
             #[cfg(all(feature = "fs", feature = "memmap"))]
