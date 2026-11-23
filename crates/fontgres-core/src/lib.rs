@@ -975,6 +975,10 @@ pub struct FaceInfo {
     /// The face's PostScript name.
     ///
     /// Corresponds to a *PostScript name* (6) [name ID] in a TrueType font.
+    /// A font without one gets a name made from its first family, as
+    /// fontconfig makes it: spaces and the other characters PostScript forbids
+    /// in a name become `-`, so *DEC Terminal Modern* gives
+    /// `DEC-Terminal-Modern`.
     ///
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub post_script_name: String,
@@ -1274,13 +1278,16 @@ fn parse_names(raw_face: &ttf_parser::RawFace) -> Option<(Vec<(String, Language)
         return None;
     }
 
+    // A font without a PostScript name still loads, with one made from its
+    // family as fontconfig makes it.
     let post_script_name = name_table
         .names
         .into_iter()
         .find(|name| {
             name.name_id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
         })
-        .and_then(|name| name_to_unicode(&name))?;
+        .and_then(|name| name_to_unicode(&name))
+        .unwrap_or_else(|| postscript_name::from_family(&families[0].0));
 
     Some((families, post_script_name))
 }
@@ -1584,6 +1591,7 @@ const MAC_ROMAN: &[u16; 256] = &[
     )
 ))]
 mod generic_family;
+mod postscript_name;
 
 #[cfg(feature = "cli")]
 pub mod cli;
