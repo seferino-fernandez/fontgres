@@ -397,9 +397,10 @@ impl Database {
 
     /// Loads every font file in `dir` and its subdirectories.
     ///
-    /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension (in lower or
-    /// upper case) load. Symbolic links are followed, and a file reached
-    /// through a link that is already in the database is not loaded again.
+    /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension, in any case,
+    /// load. Symbolic links are followed, and a link loads when either its own
+    /// name or its target's has such an extension. A file reached through a
+    /// link that is already in the database is not loaded again.
     ///
     /// Nothing here is an error. A directory that does not exist or cannot be
     /// read adds nothing, silently. A file that cannot be read, and a face that
@@ -468,21 +469,20 @@ impl Database {
         };
 
         for entry in fonts_dir.flatten() {
+            // A link counts when either its own name or its target's has a
+            // font extension: content-addressed stores link font names to
+            // files named by hash.
+            let link_is_font = has_font_extension(&entry.path());
             let (path, file_type) = match self.canonicalize(entry.path(), entry, seen) {
                 Some(v) => v,
                 None => continue,
             };
 
             if file_type.is_file() {
-                match path.extension().and_then(|e| e.to_str()) {
-                    #[rustfmt::skip] // keep extensions match as is
-                    Some("ttf") | Some("ttc") | Some("TTF") | Some("TTC") |
-                    Some("otf") | Some("otc") | Some("OTF") | Some("OTC") => {
-                        if let Err(e) = self.load_font_file(&path) {
-                            log::warn!("Failed to load '{}' cause {}.", path.display(), e);
-                        }
-                    },
-                    _ => {}
+                if link_is_font || has_font_extension(&path) {
+                    if let Err(e) = self.load_font_file(&path) {
+                        log::warn!("Failed to load '{}' cause {}.", path.display(), e);
+                    }
                 }
             } else if file_type.is_dir() {
                 self.load_fonts_dir_impl(&path, seen);
@@ -1065,6 +1065,19 @@ impl core::fmt::Debug for Source {
                 .finish(),
         }
     }
+}
+
+/// Whether `path` ends in a font extension, `ttf`, `ttc`, `otf` or `otc`, in
+/// any case.
+#[cfg(feature = "fs")]
+fn has_font_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["ttf", "ttc", "otf", "otc"]
+                .iter()
+                .any(|font| extension.eq_ignore_ascii_case(font))
+        })
 }
 
 impl Source {
