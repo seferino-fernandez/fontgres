@@ -467,7 +467,27 @@ impl core::fmt::Display for Language {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use super::{Language, TABLE};
+
+    #[test]
+    fn a_windows_language_id_names_its_language() {
+        assert_eq!(
+            Language::windows_language(0x0409),
+            Language::English_UnitedStates
+        );
+        assert_eq!(Language::windows_language(0x040C), Language::French_France);
+        assert_eq!(Language::windows_language(0xFFFF), Language::Unknown);
+    }
+
+    #[test]
+    fn a_language_reads_as_its_language_and_region() {
+        let language = Language::English_UnitedStates;
+        assert_eq!(language.primary_language(), "English");
+        assert_eq!(language.region(), "United States");
+        assert_eq!(language.to_string(), "English (United States)");
+    }
 
     #[test]
     fn table_lists_each_language_at_its_discriminant() {

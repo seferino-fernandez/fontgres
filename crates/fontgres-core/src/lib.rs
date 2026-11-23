@@ -1294,11 +1294,9 @@ fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Langu
     }
 
     // Make English US the first one.
-    if families.len() > 1
-        && let Some(index) = families
-            .iter()
-            .position(|f| f.1 == Language::English_UnitedStates)
-        && index != 0
+    if let Some(index) = families
+        .iter()
+        .position(|f| f.1 == Language::English_UnitedStates)
     {
         families.swap(0, index);
     }
@@ -1606,6 +1604,9 @@ pub use error::{ConfigError, Error};
 /// [`Error`] as the default error.
 #[cfg(feature = "cli")]
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+#[cfg(test)]
+mod face_info_tests;
 
 #[cfg(all(
     test,

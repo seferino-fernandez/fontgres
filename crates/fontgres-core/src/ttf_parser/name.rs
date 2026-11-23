@@ -180,13 +180,9 @@ impl<'a> Iterator for NamesIter<'a> {
     type Item = Name<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.names.len() {
-            let index = self.index;
-            self.index = index.checked_add(1)?;
-            self.names.get(index)
-        } else {
-            None
-        }
+        let name = self.names.get(self.index)?;
+        self.index = self.index.checked_add(1)?;
+        Some(name)
     }
 
     #[inline]
