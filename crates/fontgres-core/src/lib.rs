@@ -490,11 +490,14 @@ impl Database {
     ///   downloadable fonts under `/System/Library/AssetsV2`,
     ///   `/Network/Library/Fonts` and `~/Library/Fonts`.
     /// - Other Unix systems except Android: with the `fontconfig` feature, the
-    ///   directories fontconfig's configuration lists, whose generic family
-    ///   aliases also replace this database's generic families. Without the
-    ///   feature, or when the configuration lists no directory,
-    ///   `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.fonts` and
-    ///   `~/.local/share/fonts`.
+    ///   directories fontconfig's configuration lists. Without the feature, or
+    ///   when the configuration lists no directory, `/usr/share/fonts`,
+    ///   `/usr/local/share/fonts`, `~/.fonts` and `~/.local/share/fonts`.
+    ///   With the feature, once the fonts are loaded, each generic family that
+    ///   fontconfig has an `<alias>` for becomes the first installed family in
+    ///   the order fontconfig tries them (every alias's `prefer` list, then
+    ///   `accept`, then `default`), or the first one tried when none is
+    ///   installed.
     /// - Redox: `/ui/fonts`.
     ///
     /// Other platforms load nothing. Errors are handled as in
@@ -568,10 +571,7 @@ impl Database {
         {
             #[cfg(feature = "fontconfig")]
             {
-                if !self.load_fontconfig() {
-                    log::warn!("Fallback to loading from known font dir paths.");
-                    self.load_no_fontconfig();
-                }
+                self.load_fontconfig();
             }
 
             #[cfg(not(feature = "fontconfig"))]
@@ -605,7 +605,7 @@ impl Database {
         feature = "fontconfig",
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
-    fn load_fontconfig(&mut self) -> bool {
+    fn load_fontconfig(&mut self) {
         use std::path::Path;
 
         let mut fontconfig = fontconfig_parser::FontConfig::default();
@@ -637,50 +637,74 @@ impl Database {
             let _ = fontconfig.merge_config(Path::new("/etc/fonts/fonts.conf"));
         }
 
-        for fontconfig_parser::Alias {
-            alias,
-            default,
-            prefer,
-            accept,
-        } in fontconfig.aliases
-        {
-            let name = prefer
-                .get(0)
-                .or_else(|| accept.get(0))
-                .or_else(|| default.get(0));
-
-            if let Some(name) = name {
-                match alias.to_lowercase().as_str() {
-                    "serif" => self.set_serif_family(name),
-                    "sans-serif" => self.set_sans_serif_family(name),
-                    "sans serif" => self.set_sans_serif_family(name),
-                    "monospace" => self.set_monospace_family(name),
-                    "cursive" => self.set_cursive_family(name),
-                    "fantasy" => self.set_fantasy_family(name),
-                    _ => {}
-                }
+        if fontconfig.dirs.is_empty() {
+            log::warn!("Fallback to loading from known font dir paths.");
+            self.load_no_fontconfig();
+        } else {
+            let mut seen = Default::default();
+            for dir in core::mem::take(&mut fontconfig.dirs) {
+                let path = if dir.path.starts_with("~") {
+                    if let Ok(ref home) = home {
+                        Path::new(home).join(dir.path.strip_prefix("~").unwrap())
+                    } else {
+                        continue;
+                    }
+                } else {
+                    dir.path
+                };
+                self.load_fonts_dir_impl(&path, &mut seen);
             }
         }
 
-        if fontconfig.dirs.is_empty() {
-            return false;
-        }
+        // Generic families resolve after loading, so each can skip the
+        // families fontconfig prefers that are not installed.
+        self.set_generic_families_from_fontconfig(&fontconfig.aliases);
+    }
 
-        let mut seen = Default::default();
-        for dir in fontconfig.dirs {
-            let path = if dir.path.starts_with("~") {
-                if let Ok(ref home) = home {
-                    Path::new(home).join(dir.path.strip_prefix("~").unwrap())
-                } else {
-                    continue;
-                }
-            } else {
-                dir.path
-            };
-            self.load_fonts_dir_impl(&path, &mut seen);
-        }
+    #[cfg(all(
+        unix,
+        feature = "fontconfig",
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    fn set_generic_families_from_fontconfig(&mut self, aliases: &[fontconfig_parser::Alias]) {
+        let aliases: Vec<generic_family::Alias<'_>> = aliases
+            .iter()
+            .map(|alias| generic_family::Alias {
+                family: &alias.alias,
+                prefer: &alias.prefer,
+                accept: &alias.accept,
+                default: &alias.default,
+            })
+            .collect();
+        let [serif, sans_serif, monospace, cursive, fantasy] = [
+            &["serif"][..],
+            &["sans-serif", "sans serif"],
+            &["monospace"],
+            &["cursive"],
+            &["fantasy"],
+        ]
+        .map(|generic| {
+            generic_family::resolve(&aliases, generic, |name| {
+                self.faces.iter().any(|(_, face)| face.has_family(name))
+            })
+            .map(str::to_owned)
+        });
 
-        true
+        if let Some(name) = serif {
+            self.family_serif = name;
+        }
+        if let Some(name) = sans_serif {
+            self.family_sans_serif = name;
+        }
+        if let Some(name) = monospace {
+            self.family_monospace = name;
+        }
+        if let Some(name) = cursive {
+            self.family_cursive = name;
+        }
+        if let Some(name) = fantasy {
+            self.family_fantasy = name;
+        }
     }
 
     /// Adds a face described by the caller and returns its new ID.
@@ -1528,6 +1552,16 @@ const MAC_ROMAN: &[u16; 256] = &[
 
 // fontgres additions: configuration and CLI helpers shared by the workspace
 // binaries. They need `std`, so they sit behind the `cli` feature.
+
+#[cfg(any(
+    test,
+    all(
+        unix,
+        feature = "fontconfig",
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    )
+))]
+mod generic_family;
 
 #[cfg(feature = "cli")]
 pub mod cli;
