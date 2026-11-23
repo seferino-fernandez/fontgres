@@ -1,7 +1,9 @@
 [package]
 name = "fontgres-core"
 version.workspace = true
-edition.workspace = true
+# fontdb is written for edition 2018 and does not compile under 2024; 2021
+# compiles it unchanged. Moves to the workspace edition with the lint cleanup.
+edition = "2021"
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
@@ -14,28 +16,172 @@ categories = ["text-processing"]
 all-features = true
 
 [features]
-# Derive `schemars::JsonSchema` on the public API models so MCP/rmcp consumers
-# can advertise tool output schemas. Off by default to keep the core client free
-# of the schemars dependency.
-schema = ["dep:schemars"]
-# Shared `completions` and `man` subcommand implementations for the binaries
-# (the `cli` module). Off by default so library users don't pull in clap.
-cli = ["dep:clap", "dep:clap_complete", "dep:clap_complete_nushell", "dep:clap_mangen"]
+default = ["std", "fs", "memmap", "fontconfig"]
+std = []
+# Allows local filesystem interactions.
+fs = ["std"]
+# Allows font files memory mapping, greatly improves performance.
+memmap = ["fs", "dep:memmap2"]
+# Enables minimal fontconfig support on Linux.
+# Must be enabled for NixOS, otherwise no fonts will be loaded.
+fontconfig = ["dep:fontconfig-parser", "fs"]
+# Configuration loading, the font views and the `completions`/`man`
+# subcommand helpers shared by the workspace binaries. Off by default so
+# library users get only the font database.
+cli = [
+  "std",
+  "dep:clap",
+  "dep:clap_complete",
+  "dep:clap_complete_nushell",
+  "dep:clap_mangen",
+  "dep:dirs",
+  "dep:serde",
+  "dep:thiserror",
+  "dep:toml",
+  "dep:tracing",
+]
+# Derive `schemars::JsonSchema` on the font views so MCP consumers can
+# advertise tool output schemas.
+schema = ["cli", "dep:schemars"]
 
 [dependencies]
-serde.workspace = true
-thiserror.workspace = true
-dirs.workspace = true
-tracing.workspace = true
-toml.workspace = true
-schemars = { workspace = true, optional = true }
+log.workspace = true
+memmap2 = { workspace = true, optional = true }
+slotmap.workspace = true
+tinyvec.workspace = true
 clap = { workspace = true, optional = true }
 clap_complete = { workspace = true, optional = true }
 clap_complete_nushell = { workspace = true, optional = true }
 clap_mangen = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
+fontconfig-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+tracing-subscriber.workspace = true
 
-[lints]
-workspace = true
+# A copy of [workspace.lints] (Cargo cannot override single workspace lints).
+# Differences: unsafe_code is deny rather than forbid, so the two mmap sites
+# can carry #[expect(unsafe_code)]; and the lints the imported fontdb code
+# fails are relaxed to allow under "fontdb import" below, to be burned down
+# in a later cleanup.
+[lints.rust]
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "deny"
+unused_lifetimes = "warn"
+# Kept from the #![warn] attributes in upstream fontdb's lib.rs.
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+# fontdb import: relaxed until the lint cleanup.
+deprecated = "allow"
+elided_lifetimes_in_paths = "allow"
+unreachable_pub = "allow"  # workspace: warn
+unused_qualifications = "allow"  # workspace: warn
+
+[lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+invalid_html_tags = "allow"  # fontdb import; workspace: deny
+invalid_rust_codeblocks = "deny"
+missing_crate_level_docs = "warn"
+private_intra_doc_links = "warn"
+redundant_explicit_links = "allow"  # fontdb import; workspace: warn
+unescaped_backticks = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Public accessors and builders do not need a must_use annotation on every return value.
+must_use_candidate = "allow"
+# Domain names such as config/configs and request/response remain readable together.
+similar_names = "allow"
+
+# Keep functions small, matches exhaustive, and output deliberate
+clone_on_ref_ptr = "warn"
+cognitive_complexity = "allow"  # fontdb import
+exit = "warn"
+infinite_loop = "warn"
+print_stderr = "warn"
+print_stdout = "allow"  # fontdb import
+redundant_clone = "warn"
+shadow_unrelated = "allow"  # fontdb import
+wildcard_enum_match_arm = "allow"  # fontdb import
+
+# Prevent panics from unwraps and unsafe slicing or indexing
+arithmetic_side_effects = "allow"  # fontdb import
+expect_used = "warn"
+get_unwrap = "warn"
+indexing_slicing = "allow"  # fontdb import
+panic = "warn"
+panic_in_result_fn = "warn"
+string_slice = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+unwrap_in_result = "warn"
+unwrap_used = "allow"  # fontdb import
+
+# Prevent dropped futures and swallowed errors
+assertions_on_result_states = "warn"
+let_underscore_must_use = "allow"  # fontdb import
+map_err_ignore = "allow"  # fontdb import
+unused_result_ok = "warn"
+
+# Prevent unsafe things with memory
+mem_forget = "warn"
+multiple_unsafe_ops_per_block = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+
+# Prevent potentially incorrect things with numbers
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+
+# Don't Do Bad Things That are Easy to Avoid
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+infallible_try_from = "warn"
+rc_mutex = "warn"
+
+# Don't `allow` Your Way Around These Lints - every suppression must be
+# a deliberate #[expect(..., reason = "…")] rather than a silent #[allow]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+# fontdb import: pedantic lints the imported code fails, relaxed until the
+# lint cleanup.
+assert_is_empty = "allow"
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+checked_conversions = "allow"
+copy_iterator = "allow"
+default_trait_access = "allow"
+doc_markdown = "allow"
+elidable_lifetime_names = "allow"
+excessive_nesting = "allow"
+explicit_iter_loop = "allow"
+get_first = "allow"
+implicit_clone = "allow"
+items_after_statements = "allow"
+legacy_numeric_constants = "allow"
+manual_let_else = "allow"
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+needless_pass_by_value = "allow"
+semicolon_if_nothing_returned = "allow"
+single_match_else = "allow"
+struct_field_names = "allow"
+too_many_lines = "allow"
+trivially_copy_pass_by_ref = "allow"
+uninlined_format_args = "allow"
+unnested_or_patterns = "allow"
+unreadable_literal = "allow"

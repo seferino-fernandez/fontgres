@@ -1,10 +1,14 @@
+//! Loads the system fonts and times a query (from upstream fontdb).
+
+use fontgres_core as fontdb;
+
 #[cfg(not(feature = "fs"))]
 fn main() {}
 
 #[cfg(feature = "fs")]
 fn main() {
-    std::env::set_var("RUST_LOG", "fontdb=trace");
-    env_logger::init();
+    std::env::set_var("RUST_LOG", "fontgres_core=trace");
+    tracing_subscriber::fmt::init();
 
     let mut db = fontdb::Database::new();
     let now = std::time::Instant::now();

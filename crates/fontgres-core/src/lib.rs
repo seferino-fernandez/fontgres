@@ -50,16 +50,10 @@ On Mac Mini M1 it takes just 9ms to load 898 fonts.
 The library relies on memory-mapped files, which is inherently unsafe.
 But since we do not keep the files open it should be perfectly safe.
 
-If you would like to use a persistent memory mapping of the font files,
-then you can use the unsafe [`Database::make_shared_face_data`] function.
-
 [ttf-parser]: https://github.com/RazrFalcon/ttf-parser
 */
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![warn(missing_docs)]
-#![warn(missing_debug_implementations)]
-#![warn(missing_copy_implementations)]
 
 extern crate alloc;
 
@@ -268,6 +262,13 @@ impl Database {
     #[cfg(all(feature = "fs", feature = "memmap"))]
     fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
         let file = std::fs::File::open(path)?;
+        #[expect(
+            unsafe_code,
+            reason = "memory-mapping the font file, as upstream fontdb does"
+        )]
+        // SAFETY: the mapping lives only for this call and the file is not kept
+        // open afterwards; a concurrent change to the file during this call is
+        // the inherent risk of mmap that upstream fontdb accepts.
         let data: &[u8] = unsafe { &memmap2::MmapOptions::new().map(&file)? };
 
         self.load_fonts_from_file(path, data);
@@ -730,56 +731,8 @@ impl Database {
         src.with_data(|data| p(data, face_index))
     }
 
-    /// Makes the font data that backs the specified face id shared so that the application can
-    /// hold a reference to it.
-    ///
-    /// # Safety
-    ///
-    /// If the face originates from a file from disk, then the file is mapped from disk. This is unsafe as
-    /// another process may make changes to the file on disk, which may become visible in this process'
-    /// mapping and possibly cause crashes.
-    ///
-    /// If the underlying font provides multiple faces, then all faces are updated to participate in
-    /// the data sharing. If the face was previously marked for data sharing, then this function will
-    /// return a clone of the existing reference.
-    #[cfg(all(feature = "fs", feature = "memmap"))]
-    pub unsafe fn make_shared_face_data(
-        &mut self,
-        id: ID,
-    ) -> Option<(std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>, u32)> {
-        let face_info = self.faces.get(id.0)?;
-        let face_index = face_info.index;
-
-        let old_source = face_info.source.clone();
-
-        let (path, shared_data) = match &old_source {
-            Source::Binary(data) => {
-                return Some((data.clone(), face_index));
-            }
-            Source::File(ref path) => {
-                let file = std::fs::File::open(path).ok()?;
-                let shared_data = std::sync::Arc::new(memmap2::MmapOptions::new().map(&file).ok()?)
-                    as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>;
-                (path.clone(), shared_data)
-            }
-            Source::SharedFile(_, data) => {
-                return Some((data.clone(), face_index));
-            }
-        };
-
-        let shared_source = Source::SharedFile(path.clone(), shared_data.clone());
-
-        self.faces.iter_mut().for_each(|(_, face)| {
-            if matches!(&face.source, Source::File(old_path) if old_path == &path) {
-                face.source = shared_source.clone();
-            }
-        });
-
-        Some((shared_data, face_index))
-    }
-
-    /// Transfers ownership of shared font data back to the font database. This is the reverse operation
-    /// of [`Self::make_shared_face_data`]. If the font data belonging to the specified face is mapped
+    /// Transfers ownership of shared font data back to the font database. This is the reverse of
+    /// loading a face from a [`Source::SharedFile`]. If the font data belonging to the specified face is mapped
     /// from a file on disk, then that mapping is closed and the data becomes private to the process again.
     #[cfg(all(feature = "fs", feature = "memmap"))]
     pub fn make_face_data_unshared(&mut self, id: ID) {
@@ -915,6 +868,13 @@ impl Source {
             #[cfg(all(feature = "fs", feature = "memmap"))]
             Source::File(ref path) => {
                 let file = std::fs::File::open(path).ok()?;
+                #[expect(
+                    unsafe_code,
+                    reason = "memory-mapping the font file, as upstream fontdb does"
+                )]
+                // SAFETY: the mapping lives only for this closure call and the file
+                // is not kept open afterwards; a concurrent change to the file during
+                // the call is the inherent risk of mmap that upstream fontdb accepts.
                 let data = unsafe { &memmap2::MmapOptions::new().map(&file).ok()? };
 
                 Some(p(data))
@@ -1383,3 +1343,28 @@ const MAC_ROMAN: &[u16; 256] = &[
     0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
     0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
 ];
+
+// fontgres additions: configuration and CLI helpers shared by the workspace
+// binaries. They need `std`, so they sit behind the `cli` feature.
+
+/// Static shell completions and man pages for the workspace binaries.
+#[cfg(feature = "cli")]
+pub mod cli;
+/// Configuration loading.
+#[cfg(feature = "cli")]
+pub mod config;
+/// Environment-variable source abstraction (testable).
+#[cfg(feature = "cli")]
+pub mod env;
+/// Error types for configuration loading.
+#[cfg(feature = "cli")]
+pub mod error;
+
+#[cfg(feature = "cli")]
+pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig, GenericFamilies};
+#[cfg(feature = "cli")]
+pub use error::{ConfigError, Error};
+
+/// Crate `Result` alias. The error type defaults to [`Error`].
+#[cfg(feature = "cli")]
+pub type Result<T, E = Error> = core::result::Result<T, E>;

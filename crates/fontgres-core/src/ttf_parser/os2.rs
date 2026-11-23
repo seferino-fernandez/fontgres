@@ -8,7 +8,6 @@ const WIDTH_CLASS_OFFSET: usize = 6;
 const SELECTION_OFFSET: usize = 62;
 
 /// A face [weight](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#usweightclass).
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]
 pub enum Weight {
     Thin,
@@ -68,7 +67,10 @@ impl Default for Weight {
 }
 
 /// A face [width](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "upstream fontdb leaves the width variants undocumented"
+)]
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
 pub enum Width {
     UltraCondensed,

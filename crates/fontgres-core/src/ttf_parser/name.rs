@@ -12,7 +12,6 @@ pub mod name_id {
 }
 
 /// A [platform ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#platform-ids).
-#[allow(missing_docs)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlatformId {
     Unicode,

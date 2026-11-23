@@ -213,8 +213,14 @@ static TABLE: &[(u16, Language, &str, &str)] = &[
 /// Consists of Language + Region pairs.
 ///
 /// <https://learn.microsoft.com/en-us/typography/opentype/spec/name#windows-language-ids>
-#[allow(missing_docs)]
-#[allow(non_camel_case_types)]
+#[expect(
+    missing_docs,
+    reason = "upstream fontdb leaves the language variants undocumented"
+)]
+#[expect(
+    non_camel_case_types,
+    reason = "variant names follow the OpenType language tags, as upstream fontdb has them"
+)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Language {
     Unknown = 0,
