@@ -1,59 +1,100 @@
-/*!
-`fontdb` is a simple, in-memory font database with CSS-like queries.
-
-# Features
-
-- The database can load fonts from files, directories and raw data (`Vec<u8>`).
-- The database can match a font using CSS-like queries. See `Database::query`.
-- The database can try to load system fonts.
-  Currently, this is implemented by scanning predefined directories.
-  The library does not interact with the system API.
-- Provides a unique ID for each font face.
-
-# Non-goals
-
-- Advanced font properties querying.<br>
-  The database provides only storage and matching capabilities.
-  For font properties querying you can use [ttf-parser].
-
-- A font fallback mechanism.<br>
-  This library can be used to implement a font fallback mechanism, but it doesn't implement one.
-
-- Application's global database.<br>
-  The database doesn't use `static`, therefore it's up to the caller where it should be stored.
-
-- Font types support other than TrueType.
-
-# Font vs Face
-
-A font is a collection of font faces. Therefore, a font face is a subset of a font.
-A simple font (\*.ttf/\*.otf) usually contains a single font face,
-but a font collection (\*.ttc) can contain multiple font faces.
-
-`fontdb` stores and matches font faces, not fonts.
-Therefore, after loading a font collection with 5 faces (for example), the database will be populated
-with 5 `FaceInfo` objects, all of which will be pointing to the same file or binary data.
-
-# Performance
-
-The database performance is largely limited by the storage itself.
-We are using [ttf-parser], so the parsing should not be a bottleneck.
-
-On my machine with Samsung SSD 860 and Gentoo Linux, it takes ~20ms
-to load 1906 font faces (most of them are from Google Noto collection)
-with a hot disk cache and ~860ms with a cold one.
-
-On Mac Mini M1 it takes just 9ms to load 898 fonts.
-
-# Safety
-
-The library relies on memory-mapped files, which is inherently unsafe.
-But since we do not keep the files open it should be perfectly safe.
-
-[ttf-parser]: https://github.com/RazrFalcon/ttf-parser
-*/
+//! An in-memory font database with CSS-like queries, and the configuration and
+//! font views the `fontgres` CLI and MCP server share.
+//!
+//! Load fonts from raw data, files, directories or the system's font
+//! directories into a [`Database`], then list its faces or ask it for the
+//! face that best matches a [`Query`], using the CSS font matching algorithm
+//! for stretch, style and weight. The crate is a fork of
+//! [fontdb](https://github.com/RazrFalcon/fontdb) 0.24.0 and keeps its API at
+//! the crate root.
+//!
+//! The database only stores and matches faces. It reads a face's names, style,
+//! weight, stretch and monospace flag, and leaves other font properties to a
+//! font parser such as [ttf-parser]. It has no font fallback, though it can be
+//! the storage for one, and no global instance: the caller decides where a
+//! [`Database`] lives. Only TrueType and OpenType fonts (`.ttf`, `.otf`,
+//! `.ttc`, `.otc`) load.
+//!
+//! # Fonts and faces
+//!
+//! A font file holds one or more font faces. A plain `.ttf` or `.otf` file
+//! usually holds one face, while a collection (`.ttc`) can hold many. The
+//! database stores faces: loading a collection of five faces adds five
+//! [`FaceInfo`] entries, each with its own [`ID`], all pointing at the same
+//! [`Source`].
+//!
+//! # Quick start
+//!
+//! ```
+//! use fontgres_core::{Database, Family, Query, Weight};
+//!
+//! # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+//! let mut db = Database::new();
+//! db.load_font_data(std::fs::read(path)?);
+//!
+//! let query = Query {
+//!     families: &[Family::Name("Tuffy"), Family::SansSerif],
+//!     weight: Weight::BOLD,
+//!     ..Query::default()
+//! };
+//! let id = db.query(&query).expect("Tuffy is loaded");
+//! let face = db.face(id).expect("a matched ID is in the database");
+//! assert_eq!(face.post_script_name, "Tuffy");
+//! // Tuffy has no bold face, so the query falls back to its medium one.
+//! assert_eq!(face.weight, Weight::MEDIUM);
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! To load the fonts installed on the machine, call
+//! `Database::load_system_fonts` (the `fs` feature) instead.
+//!
+//! # Feature flags
+//!
+//! - `std` (default): links the standard library. Without it the crate is
+//!   `no_std` with `alloc`, and fonts load only from in-memory data.
+//! - `fs` (default): loading fonts from files, directories and the system's
+//!   font directories.
+//! - `memmap` (default): memory-maps font files while reading them instead of
+//!   copying them into memory.
+//! - `fontconfig` (default): on Linux and other Unix systems except macOS,
+//!   iOS and Android, reads the font directories and generic families from
+//!   fontconfig's configuration. Without it, system fonts load from a fixed
+//!   list of directories, which misses the fonts on systems such as NixOS.
+//! - `cli`: the `config`, `models`, `env`, `error` and `cli` modules,
+//!   which the `fontgres` binaries share.
+//! - `schema`: derives `schemars::JsonSchema` on the `models` views. Implies
+//!   `cli`.
+//!
+//! # Logging
+//!
+//! A face that fails to parse is skipped, and the reason is logged as a
+//! warning through the [`log`](https://docs.rs/log) crate.
+//!
+//! # Safety
+//!
+//! With the `memmap` feature, font files are memory-mapped while a load or a
+//! [`Database::with_face_data`] call reads them, and the mapping is dropped
+//! before the call returns. A file that another process truncates or rewrites
+//! during the call is undefined behavior, and in practice can crash the
+//! process. Build without `memmap` to read files into memory instead.
+//!
+//! [ttf-parser]: https://github.com/harfbuzz/ttf-parser
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// The module map links to items that exist only under the `cli` feature, so
+// it is part of the crate docs only when they are.
+#![cfg_attr(
+    feature = "cli",
+    doc = "\n# Modules\n\n\
+- [`config`]: layered configuration (CLI flags, `FONTGRES_*` environment \
+variables, `config.toml`, defaults) for which fonts to load and how to log.\n\
+- [`models`]: [`FontsConfig::build_database`], the serializable \
+[`models::Face`] view, [`models::FontQuery`] and the face and family \
+listings.\n\
+- [`env`](mod@env): the environment-variable source the configuration reads through.\n\
+- [`error`]: [`Error`] and [`ConfigError`].\n\
+- [`cli`]: the `completions` and `man` subcommand helpers.\n"
+)]
 
 extern crate alloc;
 
@@ -71,20 +112,18 @@ pub use ttf_parser::Width as Stretch;
 use slotmap::SlotMap;
 use tinyvec::TinyVec;
 
-/// A unique per database face ID.
+/// Identifies a face within one [`Database`].
 ///
-/// Since `Database` is not global/unique, we cannot guarantee that a specific ID
-/// is actually from the same db instance. This is up to the caller.
+/// An ID carries no reference to the database that issued it. Looking it up
+/// in another database returns `None` or, if that database happens to hold a
+/// face under the same key, an unrelated face; keeping IDs with their database
+/// is up to the caller.
 ///
-/// ID overflow will cause a panic, but it's highly unlikely that someone would
-/// load more than 4 billion font faces.
+/// The database panics if it runs out of IDs, which takes more than four
+/// billion faces.
 ///
-/// Because the internal representation of ID is private, The `Display` trait
-/// implementation for this type only promise that unequal IDs will be displayed
-/// as different strings, but does not make any guarantees about format or
-/// content of the strings.
-///
-/// [`KeyData`]: https://docs.rs/slotmap/latest/slotmap/struct.KeyData.html
+/// `Display` writes unequal IDs as different strings; the format is not
+/// otherwise specified.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Debug, Default)]
 pub struct ID(InnerId);
 
@@ -94,9 +133,10 @@ slotmap::new_key_type! {
 }
 
 impl ID {
-    /// Creates a dummy ID.
+    /// Returns a placeholder ID that matches no face.
     ///
-    /// Should be used in tandem with [`Database::push_face_info`].
+    /// Use it to fill [`FaceInfo::id`] before passing the face to
+    /// [`Database::push_face_info`], which replaces it.
     #[inline]
     pub fn dummy() -> Self {
         Self(InnerId::from(slotmap::KeyData::from_ffi(core::u64::MAX)))
@@ -114,7 +154,7 @@ impl core::fmt::Display for ID {
 enum LoadError {
     /// A malformed font.
     ///
-    /// Typically means that [ttf-parser](https://github.com/RazrFalcon/ttf-parser)
+    /// Typically means that [ttf-parser](https://github.com/harfbuzz/ttf-parser)
     /// wasn't able to parse it.
     MalformedFont,
     /// A valid TrueType font without a valid *Family Name*.
@@ -143,7 +183,17 @@ impl core::fmt::Display for LoadError {
     }
 }
 
-/// A font database.
+/// Stores font faces and finds the face that best matches a [`Query`].
+///
+/// Faces are added by the `load_*` methods or [`push_face_info`], and read
+/// back with [`face`], [`faces`] and [`query`]. The database also holds the
+/// family each CSS generic family ([`Family::Serif`] and the others) resolves
+/// to.
+///
+/// [`push_face_info`]: Database::push_face_info
+/// [`face`]: Database::face
+/// [`faces`]: Database::faces
+/// [`query`]: Database::query
 #[derive(Clone, Debug)]
 pub struct Database {
     faces: SlotMap<InnerId, FaceInfo>,
@@ -161,9 +211,9 @@ impl Default for Database {
 }
 
 impl Database {
-    /// Create a new, empty `Database`.
+    /// Creates an empty database.
     ///
-    /// Generic font families would be set to:
+    /// The generic font families start as:
     ///
     /// - `serif` - Times New Roman
     /// - `sans-serif` - Arial
@@ -185,17 +235,38 @@ impl Database {
         }
     }
 
-    /// Loads a font data into the `Database`.
+    /// Loads every face in the font held in `data`.
     ///
-    /// Will load all font faces in case of a font collection.
+    /// A collection adds one face per font it contains. A face that fails to
+    /// parse is skipped and logged as a warning, so data that is not a font
+    /// adds nothing. Use [`load_font_source`](Database::load_font_source) to
+    /// learn which faces were added.
     pub fn load_font_data(&mut self, data: Vec<u8>) {
         self.load_font_source(Source::Binary(alloc::sync::Arc::new(data)));
     }
 
-    /// Loads a font from the given source into the `Database` and returns
-    /// the ID of the loaded font.
+    /// Loads every face in the font at `source` and returns the IDs of the
+    /// faces added.
     ///
-    /// Will load all font faces in case of a font collection.
+    /// A collection adds one face per font it contains. A face that fails to
+    /// parse is skipped and logged as a warning. The result is empty when no
+    /// face parses, or when `source` is a file that cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fontgres_core::{Database, Source};
+    ///
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// let ids = db.load_font_source(Source::Binary(Arc::new(std::fs::read(path)?)));
+    /// assert_eq!(ids.len(), 1);
+    /// assert_eq!(db.face(ids[0]).map(|face| face.index), Some(0));
+    ///
+    /// assert!(db.load_font_source(Source::Binary(Arc::new(b"not a font".to_vec()))).is_empty());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn load_font_source(&mut self, source: Source) -> TinyVec<[ID; 8]> {
         let ids = source.with_data(|data| {
             let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
@@ -247,9 +318,17 @@ impl Database {
         }
     }
 
-    /// Loads a font file into the `Database`.
+    /// Loads every face in the font file at `path`.
     ///
-    /// Will load all font faces in case of a font collection.
+    /// A collection adds one face per font it contains. A face that fails to
+    /// parse is skipped and logged as a warning, so a readable file that is not
+    /// a font returns `Ok` and adds nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error when the file cannot be opened or read, or, with
+    /// the `memmap` feature, cannot be memory-mapped. The database is
+    /// unchanged.
     #[cfg(all(feature = "fs", feature = "memmap"))]
     pub fn load_font_file<P: AsRef<std::path::Path>>(
         &mut self,
@@ -275,9 +354,17 @@ impl Database {
         Ok(())
     }
 
-    /// Loads a font file into the `Database`.
+    /// Loads every face in the font file at `path`.
     ///
-    /// Will load all font faces in case of a font collection.
+    /// A collection adds one face per font it contains. A face that fails to
+    /// parse is skipped and logged as a warning, so a readable file that is not
+    /// a font returns `Ok` and adds nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error when the file cannot be opened or read, or, with
+    /// the `memmap` feature, cannot be memory-mapped. The database is
+    /// unchanged.
     #[cfg(all(feature = "fs", not(feature = "memmap")))]
     pub fn load_font_file<P: AsRef<std::path::Path>>(
         &mut self,
@@ -295,14 +382,15 @@ impl Database {
         Ok(())
     }
 
-    /// Loads font files from the selected directory into the `Database`.
+    /// Loads every font file in `dir` and its subdirectories.
     ///
-    /// This method will scan directories recursively.
+    /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension (in lower or
+    /// upper case) load. Symbolic links are followed, and a file reached
+    /// through a link that is already in the database is not loaded again.
     ///
-    /// Will load `ttf`, `otf`, `ttc` and `otc` fonts.
-    ///
-    /// Unlike other `load_*` methods, this one doesn't return an error.
-    /// It will simply skip malformed fonts and will print a warning into the log for each of them.
+    /// Nothing here is an error. A directory that does not exist or cannot be
+    /// read adds nothing, silently. A file that cannot be read, and a face that
+    /// fails to parse, is skipped and logged as a warning.
     #[cfg(feature = "fs")]
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
         self.load_fonts_dir_impl(dir.as_ref(), &mut Default::default())
@@ -389,16 +477,28 @@ impl Database {
         }
     }
 
-    /// Attempts to load system fonts.
+    /// Loads the fonts installed on the system by scanning its font directories.
     ///
-    /// Supports Windows, Linux and macOS.
+    /// The directories scanned are fixed per platform rather than asked of the
+    /// system's font APIs, so fonts installed elsewhere must be loaded with
+    /// [`load_fonts_dir`](Database::load_fonts_dir) or
+    /// [`load_font_file`](Database::load_font_file):
     ///
-    /// System fonts loading is a surprisingly complicated task,
-    /// mostly unsolvable without interacting with system libraries.
-    /// And since `fontdb` tries to be small and portable, this method
-    /// will simply scan some predefined directories.
-    /// Which means that fonts that are not in those directories must
-    /// be added manually.
+    /// - Windows: `%SYSTEMROOT%\Fonts` (or `C:\Windows\Fonts`), and the
+    ///   per-user font directories under `%USERPROFILE%\AppData`.
+    /// - macOS and iOS: `/Library/Fonts`, `/System/Library/Fonts`, the
+    ///   downloadable fonts under `/System/Library/AssetsV2`,
+    ///   `/Network/Library/Fonts` and `~/Library/Fonts`.
+    /// - Other Unix systems except Android: with the `fontconfig` feature, the
+    ///   directories fontconfig's configuration lists, whose generic family
+    ///   aliases also replace this database's generic families. Without the
+    ///   feature, or when the configuration lists no directory,
+    ///   `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.fonts` and
+    ///   `~/.local/share/fonts`.
+    /// - Redox: `/ui/fonts`.
+    ///
+    /// Other platforms load nothing. Errors are handled as in
+    /// [`load_fonts_dir`](Database::load_fonts_dir).
     #[cfg(feature = "fs")]
     pub fn load_system_fonts(&mut self) {
         #[cfg(target_os = "windows")]
@@ -583,12 +683,12 @@ impl Database {
         true
     }
 
-    /// Pushes a user-provided `FaceInfo` to the database.
+    /// Adds a face described by the caller and returns its new ID.
     ///
-    /// In some cases, a caller might want to ignore the font's metadata and provide their own.
-    /// This method doesn't parse the `source` font.
-    ///
-    /// The `id` field should be set to [`ID::dummy()`] and will be then overwritten by this method.
+    /// Use it to replace the metadata a font declares with your own: the face
+    /// data at `info.source` is not parsed or even read. Whatever
+    /// [`FaceInfo::id`] holds is replaced by the new ID, so fill it with
+    /// [`ID::dummy`].
     pub fn push_face_info(&mut self, mut info: FaceInfo) -> ID {
         ID(self.faces.insert_with_key(|k| {
             info.id = ID(k);
@@ -596,13 +696,10 @@ impl Database {
         }))
     }
 
-    /// Removes a font face by `id` from the database.
+    /// Removes the face with `id` from the database.
     ///
-    /// Returns `false` while attempting to remove a non-existing font face.
-    ///
-    /// Useful when you want to ignore some specific font face(s)
-    /// after loading a large directory with fonts.
-    /// Or a specific face from a font.
+    /// Use it to drop unwanted faces after loading a directory, or a single
+    /// face of a collection. An `id` that matches no face is ignored.
     pub fn remove_face(&mut self, id: ID) {
         self.faces.remove(id.0);
     }
@@ -615,42 +712,44 @@ impl Database {
 
     /// Returns the number of font faces in the `Database`.
     ///
-    /// Note that `Database` stores font faces, not fonts.
-    /// For example, if a caller will try to load a font collection (`*.ttc`) that contains 5 faces,
-    /// then the `Database` will load 5 font faces and this method will return 5, not 1.
+    /// The database stores faces, not fonts, so a collection (`*.ttc`) that
+    /// holds five faces counts five.
     #[inline]
     pub fn len(&self) -> usize {
         self.faces.len()
     }
 
-    /// Sets the family that will be used by `Family::Serif`.
+    /// Sets the family that [`Family::Serif`] resolves to.
     pub fn set_serif_family<S: Into<String>>(&mut self, family: S) {
         self.family_serif = family.into();
     }
 
-    /// Sets the family that will be used by `Family::SansSerif`.
+    /// Sets the family that [`Family::SansSerif`] resolves to.
     pub fn set_sans_serif_family<S: Into<String>>(&mut self, family: S) {
         self.family_sans_serif = family.into();
     }
 
-    /// Sets the family that will be used by `Family::Cursive`.
+    /// Sets the family that [`Family::Cursive`] resolves to.
     pub fn set_cursive_family<S: Into<String>>(&mut self, family: S) {
         self.family_cursive = family.into();
     }
 
-    /// Sets the family that will be used by `Family::Fantasy`.
+    /// Sets the family that [`Family::Fantasy`] resolves to.
     pub fn set_fantasy_family<S: Into<String>>(&mut self, family: S) {
         self.family_fantasy = family.into();
     }
 
-    /// Sets the family that will be used by `Family::Monospace`.
+    /// Sets the family that [`Family::Monospace`] resolves to.
     pub fn set_monospace_family<S: Into<String>>(&mut self, family: S) {
         self.family_monospace = family.into();
     }
 
-    /// Returns the generic family name or the `Family::Name` itself.
+    /// Returns the family name `family` resolves to in this database.
     ///
-    /// Generic family names should be set via `Database::set_*_family` methods.
+    /// A [`Family::Name`] resolves to its own name. A generic family resolves to
+    /// the family set by the matching `set_*_family` method, such as
+    /// [`set_serif_family`](Database::set_serif_family), or to the default
+    /// listed on [`Database::new`].
     pub fn family_name<'a>(&'a self, family: &'a Family) -> &'a str {
         match family {
             Family::Name(name) => name,
@@ -662,7 +761,32 @@ impl Database {
         }
     }
 
-    /// Performs a CSS-like query and returns the best matched font face.
+    /// Returns the face that best matches `query`, or `None` when no face has
+    /// any of its families.
+    ///
+    /// The families are tried in order, each resolved through
+    /// [`family_name`](Database::family_name). The first family that some face
+    /// carries, under any of its names in any language, decides the result:
+    /// among that family's faces the best stretch, then style, then weight is
+    /// chosen as the CSS font matching algorithm does. Family names compare
+    /// exactly, so case matters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fontgres_core::{Database, Family, Query};
+    ///
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// db.load_font_data(std::fs::read(path)?);
+    ///
+    /// let families = [Family::Name("Missing"), Family::Name("Tuffy")];
+    /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
+    ///
+    /// let families = [Family::Name("tuffy")];
+    /// assert_eq!(db.query(&Query { families: &families, ..Query::default() }), None);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn query(&self, query: &Query) -> Option<ID> {
         for family in query.families {
             let name = self.family_name(family);
@@ -683,45 +807,58 @@ impl Database {
         None
     }
 
-    /// Returns an iterator over the internal storage.
+    /// Returns an iterator over every face in the database, in no particular
+    /// order.
     ///
-    /// This can be used for manual font matching.
+    /// Use it for matching that [`query`](Database::query) does not cover.
     #[inline]
     pub fn faces(&self) -> impl Iterator<Item = &FaceInfo> + '_ {
         self.faces.iter().map(|(_, info)| info)
     }
 
-    /// Selects a `FaceInfo` by `id`.
+    /// Returns the face with `id`.
     ///
-    /// Returns `None` if a face with such ID was already removed,
-    /// or this ID belong to the other `Database`.
+    /// Returns `None` when the face was removed, or when `id` came from
+    /// another database. See [`ID`] for why an ID from another database can
+    /// also return an unrelated face.
     pub fn face(&self, id: ID) -> Option<&FaceInfo> {
         self.faces.get(id.0)
     }
 
-    /// Returns font face storage and the face index by `ID`.
+    /// Returns where the face with `id` is stored, and its index in that font.
+    ///
+    /// Returns `None` when no face has `id`, as for [`face`](Database::face).
     pub fn face_source(&self, id: ID) -> Option<(Source, u32)> {
         self.face(id).map(|info| (info.source.clone(), info.index))
     }
 
-    /// Executes a closure with a font's data.
+    /// Calls `p` with the data of the font holding the face with `id`, and
+    /// the face's index in that font, and returns what `p` returns.
     ///
-    /// We can't return a reference to a font binary data because of lifetimes.
-    /// So instead, you can use this method to process font's data.
+    /// The data is lent to the closure rather than returned because a file is
+    /// only read, or memory-mapped with the `memmap` feature, for the length of
+    /// the call. Pass the two arguments to a font parser to read what
+    /// [`FaceInfo`] does not hold.
     ///
-    /// The closure accepts raw font data and font face index.
+    /// Returns `None` without calling `p` when no face has `id`, or when the
+    /// face's file cannot be read.
     ///
-    /// In case of `Source::File`, the font file will be memory mapped.
+    /// # Examples
     ///
-    /// Returns `None` when font file loading failed.
+    /// ```
+    /// use fontgres_core::Database;
     ///
-    /// # Example
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// db.load_font_data(std::fs::read(path)?);
+    /// let id = db.faces().next().expect("Tuffy is loaded").id;
     ///
-    /// ```ignore
-    /// let is_variable = db.with_face_data(id, |font_data, face_index| {
-    ///     let font = ttf_parser::Face::from_slice(font_data, face_index).unwrap();
-    ///     font.is_variable()
-    /// })?;
+    /// let (magic, index) = db
+    ///     .with_face_data(id, |data, index| (data[..4].to_vec(), index))
+    ///     .expect("in-memory data is always readable");
+    /// assert_eq!(magic, [0x00, 0x01, 0x00, 0x00]); // a TrueType font
+    /// assert_eq!(index, 0);
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn with_face_data<P, T>(&self, id: ID, p: P) -> Option<T>
     where
@@ -731,9 +868,15 @@ impl Database {
         src.with_data(|data| p(data, face_index))
     }
 
-    /// Transfers ownership of shared font data back to the font database. This is the reverse of
-    /// loading a face from a [`Source::SharedFile`]. If the font data belonging to the specified face is mapped
-    /// from a file on disk, then that mapping is closed and the data becomes private to the process again.
+    /// Replaces the [`Source::SharedFile`] of the face with `id` with a
+    /// [`Source::File`] for the same path.
+    ///
+    /// Every face whose source is a `SharedFile` for that path changes, so all
+    /// the faces of a collection stop sharing the mapped data together. The
+    /// database drops its references to the mapping; the mapping closes once no
+    /// other reference holds it, and the faces' data is read from the file again
+    /// on each later access. A face with any other source, or an `id` that
+    /// matches no face, is left alone.
     #[cfg(all(feature = "fs", feature = "memmap"))]
     pub fn make_face_data_unshared(&mut self, id: ID) {
         let face_info = match self.faces.get(id.0) {
@@ -759,29 +902,29 @@ impl Database {
     }
 }
 
-/// A single font face info.
+/// Describes one face in a [`Database`]: where its data is, and the
+/// properties a [`Query`] matches on.
 ///
-/// A font can have multiple faces.
-///
-/// A single item of the `Database`.
+/// A font can hold several faces; each is a separate `FaceInfo`.
 #[derive(Clone, Debug)]
 pub struct FaceInfo {
-    /// An unique ID.
+    /// The face's ID in its database.
     pub id: ID,
 
-    /// A font source.
+    /// Where the font holding the face is stored.
     ///
-    /// Note that multiple `FaceInfo` objects can reference the same data in case of
-    /// font collections, which means that they'll use the same Source.
+    /// The faces of a collection share one source.
     pub source: Source,
 
-    /// A face index in the `source`.
+    /// The face's index within the font at [`source`](FaceInfo::source); zero
+    /// unless the font is a collection.
     pub index: u32,
 
-    /// A list of family names.
+    /// The face's family names, each with its language.
     ///
-    /// Contains pairs of Name + Language. Where the first family is always English US,
-    /// unless it's missing from the font.
+    /// The first is the English (United States) name when the font has one.
+    /// A face loaded from font data always has at least one: a face without a
+    /// family name does not load.
     ///
     /// Corresponds to a *Typographic Family* (ID 16) or a *Font Family* (ID 1) [name ID]
     /// in a TrueType font.
@@ -792,41 +935,44 @@ pub struct FaceInfo {
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub families: Vec<(String, Language)>,
 
-    /// A PostScript name.
+    /// The face's PostScript name.
     ///
     /// Corresponds to a *PostScript name* (6) [name ID] in a TrueType font.
     ///
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub post_script_name: String,
 
-    /// A font face style.
+    /// The face's style.
+    ///
+    /// A face whose `OS/2` table declares it normal but whose `post` table
+    /// gives an italic angle is [`Style::Italic`].
     pub style: Style,
 
-    /// A font face weight.
+    /// The face's weight, as its `OS/2` table declares it, or
+    /// [`Weight::NORMAL`] when it has none.
     pub weight: Weight,
 
-    /// A font face stretch.
+    /// The face's stretch, as its `OS/2` table declares it, or
+    /// [`Stretch::Normal`] when it has none.
     pub stretch: Stretch,
 
-    /// Indicates that the font face is monospaced.
+    /// Whether the face's `post` table declares it monospaced; `false` when it
+    /// has none.
     pub monospaced: bool,
 }
 
-/// A font source.
-///
-/// Either a raw binary data or a file path.
-///
-/// Stores the whole font and not just a single face.
+/// Holds or locates the data of a whole font, which may contain several faces.
 #[derive(Clone)]
 pub enum Source {
-    /// A font's raw data, typically backed by a Vec<u8>.
+    /// Font data in memory, typically a `Vec<u8>`.
     Binary(alloc::sync::Arc<dyn AsRef<[u8]> + Sync + Send>),
 
-    /// A font's path.
+    /// A font file, read each time its data is needed.
     #[cfg(feature = "fs")]
     File(std::path::PathBuf),
 
-    /// A font's raw data originating from a shared file mapping.
+    /// Font data mapped from the file at the path, shared with whoever else
+    /// holds the mapping.
     #[cfg(all(feature = "fs", feature = "memmap"))]
     SharedFile(
         std::path::PathBuf,
@@ -886,9 +1032,12 @@ impl Source {
     }
 }
 
-/// A database query.
+/// Describes the face to find with [`Database::query`], as CSS font
+/// properties.
 ///
-/// Mainly used by `Database::query()`.
+/// The default query asks for no family at normal weight, style and stretch,
+/// so set [`families`](Query::families) and fill the rest with
+/// `..Query::default()`.
 #[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
 pub struct Query<'a> {
     /// A prioritized list of font family names or generic family names.
@@ -913,7 +1062,8 @@ pub struct Query<'a> {
 }
 
 // Enum value descriptions are from the CSS spec.
-/// A [font family](https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#propdef-font-family).
+/// Names a [font family](https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#propdef-font-family)
+/// or a CSS generic family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Family<'a> {
     /// The name of a font family of choice.
@@ -929,7 +1079,7 @@ pub enum Family<'a> {
     Serif,
 
     /// Glyphs in sans-serif fonts, as the term is used in CSS, are generally low contrast
-    /// and have stroke endings that are plain — without any flaring, cross stroke,
+    /// and have stroke endings that are plain, without any flaring, cross stroke,
     /// or other ornamentation.
     SansSerif,
 
@@ -945,7 +1095,12 @@ pub enum Family<'a> {
     Monospace,
 }
 
-/// Specifies the weight of glyphs in the font, their degree of blackness or stroke thickness.
+/// The weight of a face's glyphs, their degree of blackness or stroke thickness.
+///
+/// The number is the CSS `font-weight`, from 1 to 1000. The constants name the
+/// common weights, from [`THIN`](Weight::THIN) (100) to
+/// [`BLACK`](Weight::BLACK) (900); [`NORMAL`](Weight::NORMAL) (400) is the
+/// default.
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug, Hash)]
 pub struct Weight(pub u16);
 
@@ -977,10 +1132,10 @@ impl Weight {
     pub const BLACK: Weight = Weight(900);
 }
 
-/// Allows italic or oblique faces to be selected.
+/// The slant of a face, as the CSS `font-style`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Style {
-    /// A face that is neither italic not obliqued.
+    /// A face that is neither italic nor oblique.
     Normal,
     /// A form that is generally cursive in nature.
     Italic,
@@ -1347,19 +1502,14 @@ const MAC_ROMAN: &[u16; 256] = &[
 // fontgres additions: configuration and CLI helpers shared by the workspace
 // binaries. They need `std`, so they sit behind the `cli` feature.
 
-/// Static shell completions and man pages for the workspace binaries.
 #[cfg(feature = "cli")]
 pub mod cli;
-/// Configuration loading.
 #[cfg(feature = "cli")]
 pub mod config;
-/// Environment-variable source abstraction (testable).
 #[cfg(feature = "cli")]
 pub mod env;
-/// Error types for configuration and font loading.
 #[cfg(feature = "cli")]
 pub mod error;
-/// Serializable font views, font loading and querying for the binaries.
 #[cfg(feature = "cli")]
 pub mod models;
 
@@ -1368,6 +1518,7 @@ pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig, Generic
 #[cfg(feature = "cli")]
 pub use error::{ConfigError, Error};
 
-/// Crate `Result` alias. The error type defaults to [`Error`].
+/// The result type of the configuration and font loading in this crate, with
+/// [`Error`] as the default error.
 #[cfg(feature = "cli")]
 pub type Result<T, E = Error> = core::result::Result<T, E>;

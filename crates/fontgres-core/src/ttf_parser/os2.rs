@@ -66,26 +66,37 @@ impl Default for Weight {
     }
 }
 
-/// A face [width](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
-#[expect(
-    missing_docs,
-    reason = "upstream fontdb leaves the width variants undocumented"
-)]
+/// The width of a face relative to its family's normal width, as the CSS
+/// `font-stretch`.
+///
+/// Read from the `OS/2` table's
+/// [`usWidthClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
+/// The variants are ordered from narrowest to widest.
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
 pub enum Width {
+    /// 50% of normal width.
     UltraCondensed,
+    /// 62.5% of normal width.
     ExtraCondensed,
+    /// 75% of normal width.
     Condensed,
+    /// 87.5% of normal width.
     SemiCondensed,
+    /// Normal width.
     Normal,
+    /// 112.5% of normal width.
     SemiExpanded,
+    /// 125% of normal width.
     Expanded,
+    /// 150% of normal width.
     ExtraExpanded,
+    /// 200% of normal width.
     UltraExpanded,
 }
 
 impl Width {
-    /// Returns a numeric representation of a width.
+    /// Returns the `usWidthClass` value of the width, from 1 (ultra-condensed)
+    /// to 9 (ultra-expanded).
     #[inline]
     pub fn to_number(self) -> u16 {
         match self {

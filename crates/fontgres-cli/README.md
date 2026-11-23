@@ -3,6 +3,13 @@
 Query the fonts on this machine from the terminal, built on
 [fontgres-core](../fontgres-core/), a fork of [fontdb](https://github.com/RazrFalcon/fontdb).
 
+## Install
+
+`brew install seferino-fernandez/tools/fontgres` (Homebrew, with shell completions
+and man pages), `cargo binstall fontgres-cli` (prebuilt binary) or
+`cargo install fontgres-cli` (from source). Archives for Linux, macOS and Windows
+are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
+
 ## Build
 
 ```shell
@@ -32,7 +39,7 @@ fontgres --no-system-fonts --font-dir ./fonts faces
 `query` takes families in priority order, as CSS `font-family` does. Names
 match exactly, case included, as in fontdb; the generic names `serif`,
 `sans-serif`, `cursive`, `fantasy` and `monospace` resolve through
-`[fonts.generic]`. `--weight` is 1–1000 (400 normal, 700 bold), `--style` is
+`[fonts.generic]`. `--weight` is 1-1000 (400 normal, 700 bold), `--style` is
 `normal`, `italic` or `oblique`, and `--stretch` runs from `ultra-condensed` to
 `ultra-expanded`.
 

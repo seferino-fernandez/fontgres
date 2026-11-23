@@ -1,7 +1,7 @@
 //! Error types for the configuration and font loading the workspace binaries
 //! share.
 //!
-//! Every fallible operation returns [`Error`] through the crate-level
+//! Every fallible operation returns [`Error`](enum@Error) through the crate-level
 //! [`Result`](crate::Result) alias.
 
 use std::fmt;
@@ -23,7 +23,8 @@ pub enum Error {
     #[error("configuration error: {0}")]
     Config(ConfigError),
 
-    /// Local I/O failure (e.g. reading the configuration file).
+    /// An I/O operation failed, such as reading a configuration file that
+    /// exists.
     #[error("I/O error")]
     Io(#[from] std::io::Error),
 
