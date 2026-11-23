@@ -28,7 +28,7 @@ fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 `-v`/`--verbose` and `-q`/`--quiet` adjust the log level (`-q` silent; `-v` warn,
 `-vv` info, `-vvv` debug, `-vvvv` trace). Default level precedence, highest first:
 
-`RUST_LOG` → `-v`/`-q` (when passed) → `FONTGRES_LOG_LEVEL` / config `log.level` → default (`info`)
+`RUST_LOG` -> `-v`/`-q` (when passed) -> `FONTGRES_LOG_LEVEL` / config `log.level` -> default (`info`)
 
 So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
@@ -46,8 +46,8 @@ servers can tell this one's tools apart.
 | `fontgres_list_families` | List the distinct family names                                     | Yes |
 | `fontgres_query_font`    | Best face for `families`, `weight`, `style`, `stretch` (CSS-like) | Yes |
 
-Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1–1000),
-`style` (`normal`, `italic`, `oblique`), `stretch` (`ultra-condensed` …
+Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1-1000),
+`style` (`normal`, `italic`, `oblique`), `stretch` (`ultra-condensed` ...
 `ultra-expanded`), `monospaced`, `path` and `index`. Family names in a query
 match exactly, case included; the generic names `serif`, `sans-serif`,
 `cursive`, `fantasy` and `monospace` resolve through `[fonts.generic]`.
@@ -115,7 +115,7 @@ and column.
 | `--no-system-fonts` / `FONTGRES_FONTS_SYSTEM`        | Load the system's installed fonts (default: `true`) |
 | `--font-dir` / `FONTGRES_FONTS_DIRS`                 | Extra directories, scanned recursively             |
 | `--font-file` / `FONTGRES_FONTS_FILES`               | Extra font files                                   |
-| `FONTGRES_FONTS_GENERIC_SERIF` (and `_SANS_SERIF`, …) | Family a CSS generic name resolves to              |
+| `FONTGRES_FONTS_GENERIC_SERIF` (and `_SANS_SERIF`, ...) | Family a CSS generic name resolves to              |
 | `FONTGRES_MCP_MAX_RESPONSE_BYTES`                    | Tool result size cap in bytes (default: 1 MiB)     |
 
 See [config.toml.example](../../config.toml.example) for all available fields.

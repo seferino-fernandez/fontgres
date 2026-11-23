@@ -1,8 +1,7 @@
 //! Static shell completions and man pages for the workspace binaries.
 //!
-//! Both binaries offer `completions` and `man` subcommands; this module holds
-//! the one implementation they share. Neither needs config or an API client,
-//! so callers can run them before loading any configuration.
+//! Generates the output of the `completions` and `man` subcommands. Neither
+//! reads configuration, so a binary can run them before loading any.
 
 use std::io;
 use std::path::Path;
@@ -33,6 +32,11 @@ pub enum CompletionShell {
 }
 
 /// Writes a static shell completion script for `cmd` to stdout.
+///
+/// # Panics
+///
+/// Panics if writing to stdout fails, for example when the reader closes the
+/// pipe early, and if `cmd` fails clap's debug assertions.
 pub fn write_completions(shell: CompletionShell, mut cmd: Command) {
     let name = cmd.get_name().to_string();
     let mut out = io::stdout();

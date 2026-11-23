@@ -34,8 +34,8 @@ all on by default.
 
 The `cli` feature adds what the CLI and MCP server have in common:
 
-- `config`: layered configuration (CLI flag → `FONTGRES_*` env → `config.toml`
-  → defaults) for which fonts to load (`[fonts] system/dirs/files`), the CSS
+- `config`: layered configuration (CLI flag -> `FONTGRES_*` env -> `config.toml`
+  -> defaults) for which fonts to load (`[fonts] system/dirs/files`), the CSS
   generic families (`[fonts.generic]`) and logging (`[log]`). A bad env value,
   a missing `--config`/`FONTGRES_CONFIG` file or invalid TOML is an error naming
   its source.

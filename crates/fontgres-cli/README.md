@@ -32,7 +32,7 @@ fontgres --no-system-fonts --font-dir ./fonts faces
 `query` takes families in priority order, as CSS `font-family` does. Names
 match exactly, case included, as in fontdb; the generic names `serif`,
 `sans-serif`, `cursive`, `fantasy` and `monospace` resolve through
-`[fonts.generic]`. `--weight` is 1–1000 (400 normal, 700 bold), `--style` is
+`[fonts.generic]`. `--weight` is 1-1000 (400 normal, 700 bold), `--style` is
 `normal`, `italic` or `oblique`, and `--stretch` runs from `ultra-condensed` to
 `ultra-expanded`.
 

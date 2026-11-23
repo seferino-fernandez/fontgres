@@ -1,9 +1,12 @@
-//! Serializable views of the font database for the workspace binaries, and
-//! the font loading and querying they share.
+//! Serializable views of the font database, and the loading and querying the
+//! `fontgres` binaries build on them.
 //!
-//! fontdb's own types are left untouched: [`Face`](crate::models::Face) is
-//! built from a [`FaceInfo`](crate::FaceInfo), so the CLI and MCP output stays stable if `FaceInfo`
-//! changes.
+//! [`FontsConfig::build_database`](crate::FontsConfig::build_database) loads
+//! the fonts a configuration names, [`FontQuery`] finds the best face for a
+//! list of families, and [`faces`] and [`family_names`] list what the
+//! database holds. A face comes back as a [`Face`], a copy of a
+//! [`FaceInfo`](crate::FaceInfo) that serializes with CSS keywords, so the
+//! serialized form does not change when `FaceInfo` does.
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::FontsConfig;
 use crate::{Database, FaceInfo, Family, Query, Source, Stretch, Style, Weight};
 
-/// One font face, as the binaries present it.
+/// One font face, as the `fontgres` binaries print and serialize it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Face {
@@ -24,7 +27,8 @@ pub struct Face {
     pub post_script_name: String,
     /// Normal, italic or oblique.
     pub style: FontStyle,
-    /// CSS weight: 100 (thin) to 900 (black); 400 is normal and 700 bold.
+    /// CSS weight as the font declares it, normally 1 to 1000; 400 is normal
+    /// and 700 bold.
     pub weight: u16,
     /// CSS stretch, from `ultra-condensed` to `ultra-expanded`.
     pub stretch: FontStretch,
@@ -171,7 +175,7 @@ pub struct FontQuery {
 }
 
 impl FontQuery {
-    /// A query for `families` at normal weight, style and stretch.
+    /// Creates a query for `families` at normal weight, style and stretch.
     pub fn new(families: Vec<String>) -> Self {
         Self {
             families,
@@ -181,8 +185,11 @@ impl FontQuery {
         }
     }
 
-    /// Runs the query against `database`, returning the matching face, or
-    /// `None` when no listed family is in the database.
+    /// Returns the face in `database` that best matches the query, or `None`
+    /// when no listed family is in the database.
+    ///
+    /// Matching follows [`Database::query`], so a family name other than a
+    /// generic one must match the font's family name exactly, case included.
     ///
     /// # Examples
     ///
@@ -191,7 +198,8 @@ impl FontQuery {
     /// use fontgres_core::models::FontQuery;
     ///
     /// let mut database = Database::new();
-    /// database.load_font_data(std::fs::read("tests/fonts/Tuffy.ttf")?);
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// database.load_font_data(std::fs::read(path)?);
     /// let mut query = FontQuery::new(vec!["Missing".into(), "Tuffy".into()]);
     /// query.weight = 700;
     /// let face = query.run(&database).expect("Tuffy is loaded");
@@ -225,9 +233,11 @@ fn family(name: &str) -> Family<'_> {
     }
 }
 
-/// The faces in `database`, sorted by family, then weight, style, stretch and
-/// `PostScript` name. With `family`, only the faces that carry that family name
-/// in any language, compared case-insensitively.
+/// Returns the faces in `database`, sorted by family, then weight, style,
+/// stretch and `PostScript` name.
+///
+/// With `family`, returns only the faces that carry that family name in any
+/// language, compared ignoring ASCII case.
 pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
     let mut faces: Vec<Face> = database
         .faces()
@@ -251,7 +261,7 @@ pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
     faces
 }
 
-/// The distinct primary family names in `database`, sorted.
+/// Returns the distinct primary family names in `database`, sorted.
 pub fn family_names(database: &Database) -> Vec<String> {
     let mut names: Vec<String> = database
         .faces()
@@ -267,13 +277,13 @@ impl FontsConfig {
     /// system fonts when [`system`](Self::system) is set, then each directory
     /// and file, with the generic families applied.
     ///
-    /// A file that fails to parse as a font is skipped with a logged warning,
-    /// as fontdb does.
+    /// A face that fails to parse is skipped with a logged warning, as in
+    /// [`Database::load_font_file`].
     ///
     /// # Errors
     ///
     /// Returns [`Error::FontDirNotFound`](crate::Error::FontDirNotFound) when a
-    /// directory does not exist, and
+    /// directory does not exist or is not a directory, and
     /// [`Error::FontFile`](crate::Error::FontFile) when a file cannot be read.
     pub fn build_database(&self) -> crate::Result<Database> {
         let mut database = Database::new();

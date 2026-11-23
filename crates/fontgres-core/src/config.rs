@@ -1,5 +1,6 @@
-//! Configuration loading with layered precedence:
-//! **CLI flag → `FONTGRES_*` env → `config.toml` → defaults.**
+//! Loads the configuration the `fontgres` binaries share, from layers in
+//! precedence order: CLI flags, `FONTGRES_*` environment variables,
+//! `config.toml`, then defaults.
 //!
 //! CLI flags arrive as [`ConfigOverrides`], the top layer, so the loader
 //! applies every layer itself. A list setting (font directories or files) is
@@ -327,9 +328,13 @@ impl Config {
         Ok(config)
     }
 
-    /// Determines the config file path and the layer that named it: explicit
-    /// arg → `FONTGRES_CONFIG` env → platform config directory (when the file
-    /// exists there) → `~/.config/fontgres/config.toml`.
+    /// Returns the configuration file path and the layer that named it.
+    ///
+    /// The first of these wins: `path`, the `FONTGRES_CONFIG` variable,
+    /// `fontgres/config.toml` in the platform configuration directory when the
+    /// file exists there, and `~/.config/fontgres/config.toml`. Returns `None`
+    /// only when neither `path` nor the variable is set and the home directory
+    /// cannot be determined.
     ///
     /// # Examples
     ///
@@ -372,8 +377,8 @@ impl Config {
     /// deserializes it as `T`, or returns `T::default()` when a default location
     /// holds no file.
     ///
-    /// Exposed so dependent crates (e.g. the MCP server) parse their own tables
-    /// from the same file under the same missing-file and error rules.
+    /// Lets a binary read tables of its own from the same file, under the same
+    /// missing-file and error rules as [`load`](Self::load).
     ///
     /// [`resolve_config_path`]: Self::resolve_config_path
     ///
