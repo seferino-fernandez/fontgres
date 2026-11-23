@@ -69,8 +69,8 @@ tempfile.workspace = true
 tracing-subscriber.workspace = true
 
 # A copy of [workspace.lints] (Cargo cannot override single workspace lints).
-# Differences: unsafe_code is deny rather than forbid, so the two mmap sites
-# can carry #[expect(unsafe_code)]; and the lints the imported fontdb code
+# Differences: unsafe_code is deny rather than forbid, so the mmap site can
+# carry #[expect(unsafe_code)]; and the lints the imported fontdb code
 # fails are relaxed to allow under "fontdb import" below, to be burned down
 # in a later cleanup.
 [lints.rust]
