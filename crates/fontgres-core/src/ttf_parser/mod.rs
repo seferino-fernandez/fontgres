@@ -21,7 +21,7 @@ use parser::{FromData, NumFrom, Offset, Offset32, Stream};
 
 /// A TrueType font magic.
 ///
-/// https://docs.microsoft.com/en-us/typography/opentype/spec/otff#organization-of-an-opentype-font
+/// <https://docs.microsoft.com/en-us/typography/opentype/spec/otff#organization-of-an-opentype-font>
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Magic {
     TrueType,

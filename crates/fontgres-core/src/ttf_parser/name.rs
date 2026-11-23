@@ -99,7 +99,7 @@ pub(crate) struct Name<'a> {
     pub name: &'a [u8],
 }
 
-impl<'a> Name<'a> {
+impl Name<'_> {
     /// Checks that the current Name data has a Unicode encoding.
     #[inline]
     pub(crate) fn is_unicode(&self) -> bool {
