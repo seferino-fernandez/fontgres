@@ -1,0 +1,27 @@
+version: 2
+updates:
+    - package-ecosystem: cargo
+      directory: "/"
+      schedule:
+          interval: "weekly"
+      # Group dependency updates into a single pull request.
+      groups:
+          dependencies:
+              patterns:
+                  - "*"
+
+    - package-ecosystem: "github-actions"
+      directory: "/"
+      schedule:
+          interval: "weekly"
+      # Group dependency updates into a single pull request.
+      groups:
+          dependencies:
+              patterns:
+                  - "*"
+
+    # Bumps the pinned channel in rust-toolchain.toml.
+    - package-ecosystem: "rust-toolchain"
+      directory: "/"
+      schedule:
+          interval: "weekly"

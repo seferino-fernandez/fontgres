@@ -1,0 +1,35 @@
+[package]
+name = "fontgres-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Terminal CLI for the FONTGRES API"
+readme = "README.md"
+keywords = ["cli", "api", "client", "terminal"]
+categories = ["command-line-utilities", "api-bindings"]
+
+[[bin]]
+name = "fontgres"
+path = "src/main.rs"
+
+[dependencies]
+fontgres-core = { workspace = true, features = ["cli"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+clap = { workspace = true }
+clap_complete = { workspace = true }
+clap-verbosity-flag = { workspace = true }
+comfy-table.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+wiremock.workspace = true
+
+[lints]
+workspace = true

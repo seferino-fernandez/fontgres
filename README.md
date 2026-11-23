@@ -1,0 +1,156 @@
+# fontgres
+
+An HTTP API wrapped as three Rust crates: a library, a CLI, and an MCP server.
+Requests are authenticated with a single long-lived API key sent as an
+`X-Api-Key` header against a configurable base URL.
+
+## Crates
+
+| Crate | Description |
+| --- | --- |
+| `fontgres-core` | Async API client library |
+| `fontgres-cli` | Terminal CLI (`fontgres`) |
+| `fontgres-mcp` | MCP server (`fontgres-mcp`) for LLM clients |
+
+The CLI and the MCP server both depend on the core library, so the request,
+auth, config, and error handling live in one place:
+
+```text
+            fontgres-core  (ApiClient, Config, models, errors)
+              /     \
+       fontgres-cli   fontgres-mcp
+     (clap CLI)   (MCP tools)
+```
+
+## Quick start
+
+Build the project:
+
+```shell
+cargo build
+```
+
+Run the project's tests:
+
+```shell
+cargo test
+```
+
+Run a command from the CLI module:
+
+```shell
+FONTGRES_BASE_URL=http://localhost:8080 FONTGRES_API_KEY=xxxx cargo run -p fontgres-cli -- status
+```
+
+## Configuration
+
+Configuration is layered, highest precedence first:
+CLI flag, then `FONTGRES_*` env, then `FONTGRES_*_FILE` env, then `config.toml`, then
+built-in defaults. See [`config.toml.example`](config.toml.example) for every setting.
+Only the winning layer of a secret is read, so a `*_FILE` behind a higher layer
+is never opened. Mistakes fail at startup: an env value that
+does not parse is an error naming the variable, a config file named by
+`--config` or `FONTGRES_CONFIG` must exist, and a TOML error reports the line and
+column without echoing the line.
+
+## Logging and verbosity flag
+
+Both binaries take `-v`/`--verbose` and `-q`/`--quiet` flags: `-q` silent;
+`-v` warn, `-vv` info, `-vvv` debug, `-vvvv` trace. Default level precedence,
+highest first:
+
+`RUST_LOG` → `-v`/`-q` (when passed) → `FONTGRES_LOG_LEVEL` / `[log] level` → built-in default
+
+The built-in default is `error` for the `fontgres` CLI and `info` for the
+`fontgres-mcp` server. An invalid configured level prints a warning and falls back
+to that default. Place the flag before the subcommand: `fontgres -v status`.
+`RUST_LOG` overrides everything (e.g. `RUST_LOG=fontgres_core=trace,reqwest=debug`).
+
+## Shell completions
+
+The `fontgres` CLI supports static completions for bash, elvish, fish, nushell,
+powershell, and zsh, plus dynamic completions for every shell except nushell.
+
+**Static** - generate a script once and install it where your shell looks for it:
+
+```shell
+fontgres completions zsh     > ~/.zsh/completions/_fontgres
+```
+
+```shell
+fontgres completions bash    | sudo tee /usr/share/bash-completion/completions/fontgres
+```
+
+```shell
+fontgres completions fish    > ~/.config/fish/completions/fontgres.fish
+```
+
+```shell
+fontgres completions nushell > ~/.config/nushell/completions/fontgres.nu
+```
+
+**Dynamic** - let the binary drive completions at runtime via the `COMPLETE`
+environment variable. Add one line to your shell startup file:
+
+```shell
+echo 'source <(COMPLETE=zsh fontgres)'  >> ~/.zshrc
+```
+
+```shell
+echo 'source <(COMPLETE=bash fontgres)' >> ~/.bashrc
+```
+
+```shell
+echo 'COMPLETE=fish fontgres | source'  >> ~/.config/fish/completions/fontgres.fish
+```
+
+## Man pages
+
+The `fontgres` CLI generates ROFF man pages for itself and every subcommand into a
+directory (created if missing):
+
+```bash
+fontgres man ~/.local/share/man/man1
+```
+
+## MCP server
+
+`fontgres-mcp` implements MCP **2026-07-28** (`rmcp 3.x`) and exposes the same API to
+LLM clients through the following transports:
+
+- `stdio`: for local clients such as Claude Desktop.
+Launch `fontgres-mcp` from your MCP client with `FONTGRES_BASE_URL` and `FONTGRES_API_KEY`
+in its environment. The server defaults to stdio; logs go to stderr.
+
+Tool names carry a `fontgres_` prefix. Tool input schemas are closed
+(`additionalProperties: false`) and unknown arguments are refused, tool results
+are capped to a configurable byte budget, and destructive tools ask capable clients
+for confirmation (`confirm_destructive`). Tool results pass through
+`Redacted<T>`, which masks the credential forms listed in the
+[`fontgres-core` README](crates/fontgres-core/README.md#redaction) and the configured API key;
+it is pattern-based, so a secret in a shape it does not recognize is not
+masked. Both the CLI and the MCP server show errors only through
+`Error::public_message()`, never an upstream body or URL. See the
+[`fontgres-mcp` README](crates/fontgres-mcp/README.md) for details.
+
+## Quality guardrails
+
+`just verify` runs every check CI runs: formatting, strict Clippy lints, tests,
+docs, dependency policy, spelling, TOML style and the ast-grep rules.
+[`docs/quality-guardrails.md`](docs/quality-guardrails.md) lists each tool and
+what it catches; [`AGENTS.md`](AGENTS.md) holds the rules for coding agents.
+
+Install the tools once:
+
+```shell
+cargo install --locked just cargo-nextest cargo-deny cargo-shear typos-cli ast-grep prek
+cargo install --locked cargo-mutants   # optional: `just mutants-diff`
+prek install                           # run the fast checks on each commit
+```
+
+Tombi installs separately (see [its install guide](https://tombi-toml.github.io/tombi/docs/installation)),
+and `just dupes` needs Node.js for `npx`.
+
+## License
+
+[MIT](LICENSE.md)
