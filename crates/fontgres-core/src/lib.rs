@@ -502,7 +502,7 @@ impl Database {
     /// - macOS and iOS: `/Library/Fonts`, `/System/Library/Fonts`, the
     ///   downloadable fonts under `/System/Library/AssetsV2`,
     ///   `/Network/Library/Fonts` and `~/Library/Fonts`.
-    /// - Other Unix systems except Android: with the `fontconfig` feature, the
+    /// - Other Unix systems except Android, Redox included: with the `fontconfig` feature, the
     ///   directories fontconfig's configuration lists. Without the feature, or
     ///   when the configuration lists no directory, `/usr/share/fonts`,
     ///   `/usr/local/share/fonts`, `~/.fonts` and `~/.local/share/fonts`.
@@ -511,7 +511,6 @@ impl Database {
     ///   the order fontconfig tries them (every alias's `prefer` list, then
     ///   `accept`, then `default`), or the first one tried when none is
     ///   installed.
-    /// - Redox: `/ui/fonts`.
     ///
     /// Other platforms load nothing. Errors are handled as in
     /// [`load_fonts_dir`](Database::load_fonts_dir).
@@ -567,13 +566,6 @@ impl Database {
                 let home_path = std::path::Path::new(home);
                 self.load_fonts_dir_impl(&home_path.join("Library/Fonts"), &mut seen);
             }
-        }
-
-        // Redox OS.
-        #[cfg(target_os = "redox")]
-        {
-            let mut seen = Default::default();
-            self.load_fonts_dir_impl("/ui/fonts".as_ref(), &mut seen);
         }
 
         // Linux.
