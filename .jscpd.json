@@ -1,8 +1,6 @@
 {
-  "$comment": "Code copied from fontdb 0.24.0 keeps its upstream shape; its internal repeats are not ours to dedupe. Remove an entry once that file has been cleaned up. Changelogs (written by release-plz) and manifests (per-crate packaging metadata such as cargo-binstall) repeat by design.",
+  "$comment": "Changelogs (written by release-plz) and manifests (per-crate packaging metadata such as cargo-binstall) repeat by design.",
   "ignore": [
-    "**/fontgres-core/src/lib.rs",
-    "**/fontgres-core/src/ttf_parser/**",
     "**/CHANGELOG.md",
     "**/Cargo.toml"
   ]
