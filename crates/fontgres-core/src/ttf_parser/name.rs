@@ -133,7 +133,7 @@ impl<'a> Names<'a> {
     pub(crate) fn get(&self, index: u16) -> Option<Name<'a>> {
         let record = self.records.get(index)?;
         let name_start = record.offset.to_usize();
-        let name_end = name_start + usize::from(record.length);
+        let name_end = name_start.checked_add(usize::from(record.length))?;
         let name = self.storage.get(name_start..name_end)?;
         Some(Name {
             platform_id: record.platform_id,
@@ -181,8 +181,9 @@ impl<'a> Iterator for NamesIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.names.len() {
-            self.index += 1;
-            self.names.get(self.index - 1)
+            let index = self.index;
+            self.index = index.checked_add(1)?;
+            self.names.get(index)
         } else {
             None
         }
@@ -226,8 +227,8 @@ impl<'a> Table<'a> {
 
         let records = s.read_array16::<NameRecord>(count)?;
 
-        if s.offset() < storage_offset {
-            s.advance(storage_offset - s.offset());
+        if let Some(gap) = storage_offset.checked_sub(s.offset()) {
+            s.advance(gap);
         }
 
         let storage = s.tail()?;

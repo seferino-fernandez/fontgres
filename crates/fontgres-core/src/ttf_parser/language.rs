@@ -433,26 +433,47 @@ pub enum Language {
 
 impl Language {
     pub(crate) fn windows_language(id: u16) -> Self {
-        if let Some(index) = TABLE.iter().position(|v| v.0 == id) {
-            TABLE[index].1
-        } else {
-            Self::Unknown
-        }
+        TABLE
+            .iter()
+            .find(|entry| entry.0 == id)
+            .map_or(Self::Unknown, |entry| entry.1)
     }
 
     /// Returns the primary language.
     pub fn primary_language(&self) -> &'static str {
-        TABLE[*self as usize].2
+        self.entry().2
     }
 
     /// Returns a language region.
     pub fn region(&self) -> &'static str {
-        TABLE[*self as usize].3
+        self.entry().3
+    }
+
+    /// Returns the language's `TABLE` entry.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "TABLE lists one entry per variant in declaration order, so a variant's discriminant is its entry's index, as the table_lists_each_language_at_its_discriminant test checks"
+    )]
+    fn entry(self) -> &'static (u16, Language, &'static str, &'static str) {
+        &TABLE[self as usize]
     }
 }
 
 impl core::fmt::Display for Language {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} ({})", self.primary_language(), self.region())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Language, TABLE};
+
+    #[test]
+    fn table_lists_each_language_at_its_discriminant() {
+        assert_eq!(TABLE.len(), Language::Yoruba_Nigeria as usize + 1);
+        for (index, entry) in TABLE.iter().enumerate() {
+            assert_eq!(entry.1 as usize, index, "{:?}", entry.1);
+        }
     }
 }

@@ -114,10 +114,10 @@ shadow_unrelated = "warn"
 wildcard_enum_match_arm = "warn"
 
 # Prevent panics from unwraps and unsafe slicing or indexing
-arithmetic_side_effects = "allow"  # fontdb import
+arithmetic_side_effects = "warn"
 expect_used = "warn"
 get_unwrap = "warn"
-indexing_slicing = "allow"  # fontdb import
+indexing_slicing = "warn"
 panic = "warn"
 panic_in_result_fn = "warn"
 string_slice = "warn"

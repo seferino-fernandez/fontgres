@@ -47,7 +47,8 @@ fn pick_weight(weights: &[u16], query: u16) -> Option<u16> {
         .iter()
         .map(|&weight| face(Stretch::Normal, Style::Normal, weight))
         .collect();
-    pick(&faces, Stretch::Normal, Style::Normal, query).map(|index| weights[index])
+    pick(&faces, Stretch::Normal, Style::Normal, query)
+        .and_then(|index| weights.get(index).copied())
 }
 
 fn pick_style(styles: &[Style], query: Style) -> Option<Style> {
@@ -55,7 +56,7 @@ fn pick_style(styles: &[Style], query: Style) -> Option<Style> {
         .iter()
         .map(|&style| face(Stretch::Normal, style, 400))
         .collect();
-    pick(&faces, Stretch::Normal, query, 400).map(|index| styles[index])
+    pick(&faces, Stretch::Normal, query, 400).and_then(|index| styles.get(index).copied())
 }
 
 fn pick_stretch(stretches: &[Stretch], query: Stretch) -> Option<Stretch> {
@@ -63,7 +64,7 @@ fn pick_stretch(stretches: &[Stretch], query: Stretch) -> Option<Stretch> {
         .iter()
         .map(|&stretch| face(stretch, Style::Normal, 400))
         .collect();
-    pick(&faces, query, Style::Normal, 400).map(|index| stretches[index])
+    pick(&faces, query, Style::Normal, 400).and_then(|index| stretches.get(index).copied())
 }
 
 #[test]
