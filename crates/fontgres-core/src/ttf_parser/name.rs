@@ -5,15 +5,15 @@ use super::Language;
 use super::parser::{FromData, LazyArray16, Offset, Offset16, Stream};
 
 /// A list of [name ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids)'s.
-pub mod name_id {
-    pub const FAMILY: u16 = 1;
-    pub const POST_SCRIPT_NAME: u16 = 6;
-    pub const TYPOGRAPHIC_FAMILY: u16 = 16;
+pub(crate) mod name_id {
+    pub(crate) const FAMILY: u16 = 1;
+    pub(crate) const POST_SCRIPT_NAME: u16 = 6;
+    pub(crate) const TYPOGRAPHIC_FAMILY: u16 = 16;
 }
 
 /// A [platform ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#platform-ids).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PlatformId {
+pub(crate) enum PlatformId {
     Unicode,
     Macintosh,
     Iso,
@@ -82,7 +82,7 @@ impl FromData for NameRecord {
 
 /// A [Name Record](https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-records).
 #[derive(Clone, Copy)]
-pub struct Name<'a> {
+pub(crate) struct Name<'a> {
     /// A platform ID.
     pub platform_id: PlatformId,
     /// A platform-specific encoding ID.
@@ -102,12 +102,12 @@ pub struct Name<'a> {
 impl<'a> Name<'a> {
     /// Checks that the current Name data has a Unicode encoding.
     #[inline]
-    pub fn is_unicode(&self) -> bool {
+    pub(crate) fn is_unicode(&self) -> bool {
         is_unicode_encoding(self.platform_id, self.encoding_id)
     }
 
     /// Returns a Name language.
-    pub fn language(&self) -> Language {
+    pub(crate) fn language(&self) -> Language {
         if self.platform_id == PlatformId::Windows {
             Language::windows_language(self.language_id)
         } else if self.platform_id == PlatformId::Macintosh
@@ -123,14 +123,14 @@ impl<'a> Name<'a> {
 
 /// A list of face names.
 #[derive(Clone, Copy, Default)]
-pub struct Names<'a> {
+pub(crate) struct Names<'a> {
     records: LazyArray16<'a, NameRecord>,
     storage: &'a [u8],
 }
 
 impl<'a> Names<'a> {
     /// Returns a name at index.
-    pub fn get(&self, index: u16) -> Option<Name<'a>> {
+    pub(crate) fn get(&self, index: u16) -> Option<Name<'a>> {
         let record = self.records.get(index)?;
         let name_start = record.offset.to_usize();
         let name_end = name_start + usize::from(record.length);
@@ -145,7 +145,7 @@ impl<'a> Names<'a> {
     }
 
     /// Returns a number of name records.
-    pub fn len(&self) -> u16 {
+    pub(crate) fn len(&self) -> u16 {
         self.records.len()
     }
 }
@@ -171,7 +171,7 @@ impl<'a> IntoIterator for Names<'a> {
 
 /// An iterator over face names.
 #[derive(Clone, Copy)]
-pub struct NamesIter<'a> {
+pub(crate) struct NamesIter<'a> {
     names: Names<'a>,
     index: u16,
 }
@@ -197,14 +197,14 @@ impl<'a> Iterator for NamesIter<'a> {
 /// A [Naming Table](
 /// https://docs.microsoft.com/en-us/typography/opentype/spec/name).
 #[derive(Clone, Copy, Default, Debug)]
-pub struct Table<'a> {
+pub(crate) struct Table<'a> {
     /// A list of names.
     pub names: Names<'a>,
 }
 
 impl<'a> Table<'a> {
     /// Parses a table from raw data.
-    pub fn parse(data: &'a [u8]) -> Option<Self> {
+    pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
         // https://docs.microsoft.com/en-us/typography/opentype/spec/name#naming-table-format-1
         const LANG_TAG_RECORD_SIZE: u16 = 4;
 
