@@ -29,7 +29,7 @@ fontconfig = ["dep:fontconfig-parser", "fs"]
 # subcommand helpers shared by the workspace binaries. Off by default so
 # library users get only the font database.
 cli = [
-  "std",
+  "fs",
   "dep:clap",
   "dep:clap_complete",
   "dep:clap_complete_nushell",

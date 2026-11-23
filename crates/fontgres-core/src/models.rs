@@ -397,7 +397,7 @@ mod tests {
     fn family_filter_ignores_case_and_drops_other_families() {
         let database = tuffy_only().build_database().unwrap();
         assert_eq!(faces(&database, Some("tUFFY")).len(), 1);
-        assert!(faces(&database, Some("Nope")).is_empty());
+        assert_eq!(faces(&database, Some("Nope")), Vec::<Face>::new());
     }
 
     #[test]
@@ -438,14 +438,17 @@ mod tests {
             "{err}"
         );
 
-        let config = FontsConfig {
+        let file_config = FontsConfig {
             system: false,
             files: vec![missing.join("x.ttf")],
             ..FontsConfig::default()
         };
-        let err = config.build_database().unwrap_err();
-        assert!(matches!(err, crate::Error::FontFile { .. }), "{err:?}");
-        assert!(err.to_string().contains("x.ttf"), "{err}");
+        let file_err = file_config.build_database().unwrap_err();
+        assert!(
+            matches!(file_err, crate::Error::FontFile { .. }),
+            "{file_err:?}"
+        );
+        assert!(file_err.to_string().contains("x.ttf"), "{file_err}");
     }
 
     #[test]

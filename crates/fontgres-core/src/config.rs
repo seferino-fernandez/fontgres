@@ -513,8 +513,8 @@ mod tests {
     fn defaults_load_system_fonts_only() {
         let fonts = Config::default().fonts;
         assert!(fonts.system);
-        assert!(fonts.dirs.is_empty());
-        assert!(fonts.files.is_empty());
+        assert_eq!(fonts.dirs, Vec::<PathBuf>::new());
+        assert_eq!(fonts.files, Vec::<PathBuf>::new());
         assert_eq!(fonts.generic, GenericFamilies::default());
     }
 
