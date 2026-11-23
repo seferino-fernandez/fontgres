@@ -1,0 +1,7 @@
+{
+  "$comment": "Code copied from fontdb 0.24.0 keeps its upstream shape; its internal repeats are not ours to dedupe. Remove an entry once that file has been cleaned up.",
+  "ignore": [
+    "**/fontgres-core/src/lib.rs",
+    "**/fontgres-core/src/ttf_parser/**"
+  ]
+}
