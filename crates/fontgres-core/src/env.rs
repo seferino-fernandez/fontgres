@@ -2,13 +2,13 @@
 //!
 //! Splitting the "where does an env var come from?" question behind a trait
 //! lets production code read from the process environment while tests pass
-//! an in-memory [`MapEnv`](crate::env::MapEnv). The config module never calls
+//! an in-memory [`MapEnv`]. The config module never calls
 //! `std::env::var` directly; every env read goes through an
 //! [`&impl Env`](crate::env::Env).
 //!
-//! [`env_non_empty`](crate::env::env_non_empty) treats an empty string as
-//! unset. The typed parsers [`env_parse`](crate::env::env_parse) and
-//! [`env_parse_bool`](crate::env::env_parse_bool) trim the value first, treat
+//! [`env_non_empty`] treats an empty string as
+//! unset. The typed parsers [`env_parse`] and
+//! [`env_parse_bool`] trim the value first, treat
 //! an empty or whitespace-only value as unset, and fail with
 //! [`ConfigError::InvalidEnvValue`] naming the variable and its raw value when
 //! the value does not parse, so a typo never silently falls back to a lower

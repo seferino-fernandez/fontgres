@@ -5,7 +5,7 @@
 //! the fonts a configuration names, [`FontQuery`] finds the best face for a
 //! list of families, and [`faces`] and [`family_names`] list what the
 //! database holds. A face comes back as a [`Face`], a copy of a
-//! [`FaceInfo`](crate::FaceInfo) that serializes with CSS keywords, so the
+//! [`FaceInfo`] that serializes with CSS keywords, so the
 //! serialized form does not change when `FaceInfo` does.
 
 use std::path::{Path, PathBuf};
