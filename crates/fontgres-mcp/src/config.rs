@@ -1,34 +1,29 @@
-//! Server configuration: core client config + MCP-specific settings.
+//! Server configuration: core config + MCP-specific settings.
 //!
 //! [`ServerConfig`] embeds the core [`Config`] and adds an
 //! [`McpConfig`] for the MCP server. Both are loaded
-//! from the same `config.toml`: core fields at the top level, MCP fields under
-//! `[mcp]`. Environment overrides use the `FONTGRES_MCP_*` prefix, and `*_FILE`
-//! variants read a secret from a file (Docker secret convention). CLI flags
-//! arrive as [`ServerOverrides`], the top layer above all of these.
+//! from the same `config.toml`: core tables such as `[fonts]` and `[log]`,
+//! MCP fields under `[mcp]`. Environment overrides use the `FONTGRES_MCP_*`
+//! prefix. CLI flags arrive as [`ServerOverrides`], the top layer above all of
+//! these.
 
-use fontgres_core::env::{Env, SystemEnv, env_parse, env_parse_bool};
+use fontgres_core::env::{Env, SystemEnv, env_parse};
 use fontgres_core::{Config, ConfigOverrides};
 use serde::Deserialize;
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
 
 use crate::auth::Transport;
-const ENV_MCP_CONFIRM_DESTRUCTIVE: &str = "FONTGRES_MCP_CONFIRM_DESTRUCTIVE";
 const ENV_MCP_MAX_RESPONSE_BYTES: &str = "FONTGRES_MCP_MAX_RESPONSE_BYTES";
 
 /// Default cap on serialized tool-result size: 1 MiB. Generous enough not to
-/// clip normal API responses, while guarding against pathological payloads.
+/// clip normal results, while guarding against pathological payloads.
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// MCP-server-specific settings.
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpConfig {
-    /// Ask for confirmation before running a destructive tool, when the client
-    /// negotiated MCP 2026-07-28 and supports form elicitation. Clients without
-    /// it run destructive tools directly. Defaults to `true`.
-    pub confirm_destructive: bool,
     /// Maximum exact serialized size (bytes) of a tool result. Results
     /// exceeding this are replaced with a bounded `response_too_large` error;
     /// if even that cannot fit, the call fails with a protocol error. Defaults
@@ -39,7 +34,6 @@ pub(crate) struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            confirm_destructive: true,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
     }
@@ -48,7 +42,6 @@ impl Default for McpConfig {
 impl Debug for McpConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpConfig")
-            .field("confirm_destructive", &self.confirm_destructive)
             .field("max_response_bytes", &self.max_response_bytes)
             .finish()
     }
@@ -57,7 +50,7 @@ impl Debug for McpConfig {
 /// Full server configuration.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ServerConfig {
-    /// Upstream API client config.
+    /// Core config: fonts and logging.
     pub core: Config,
     /// MCP server settings.
     pub mcp: McpConfig,
@@ -65,11 +58,10 @@ pub(crate) struct ServerConfig {
 
 /// Explicit values that sit above every other layer: the server's CLI flags.
 ///
-/// Each `Some` beats the matching env var, env `*_FILE` var and TOML setting.
-/// A winning secret is used verbatim, even when empty.
+/// Each one beats the matching env var and TOML setting.
 #[derive(Debug, Default)]
 pub(crate) struct ServerOverrides {
-    /// Core client overrides (`--base-url`, `--api-key`).
+    /// Core overrides (the font flags).
     pub core: ConfigOverrides,
 }
 
@@ -116,12 +108,9 @@ impl ServerConfig {
     }
 }
 
-/// Applies the non-secret `FONTGRES_MCP_*` env vars, which beat TOML. A value that
+/// Applies the `FONTGRES_MCP_*` env vars, which beat TOML. A value that
 /// does not parse is an error naming the variable and the raw value.
 fn apply_mcp_env(mcp: &mut McpConfig, env: &impl Env) -> anyhow::Result<()> {
-    if let Some(val) = env_parse_bool(env, ENV_MCP_CONFIRM_DESTRUCTIVE)? {
-        mcp.confirm_destructive = val;
-    }
     if let Some(val) = env_parse::<u64>(env, ENV_MCP_MAX_RESPONSE_BYTES)? {
         // Saturate rather than truncate on 32-bit targets: an absurdly large cap
         // simply becomes "effectively unbounded".
@@ -134,16 +123,11 @@ fn apply_mcp_env(mcp: &mut McpConfig, env: &impl Env) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use fontgres_core::env::MapEnv;
-    use fontgres_core::{SecretString, secret::MASKED_VALUE};
     use std::fs;
 
-    fn expose_secret_opt(secret: Option<&SecretString>) -> Option<&str> {
-        secret.map(SecretString::expose_secret)
-    }
-
     /// Writes `toml` as the config file and returns an env pointing at it,
-    /// with the temp directory that also holds any secret files. Keeps every
-    /// load away from the real user config.
+    /// with the temp directory that holds it. Keeps every load away from the
+    /// real user config.
     fn env_with_toml(toml: &str) -> (tempfile::TempDir, MapEnv) {
         let directory = tempfile::tempdir().unwrap();
         let config = directory.path().join("config.toml");
@@ -156,35 +140,8 @@ mod tests {
         env_with_toml("")
     }
 
-    fn missing_file(directory: &tempfile::TempDir) -> String {
-        directory
-            .path()
-            .join("missing-secret")
-            .to_string_lossy()
-            .into_owned()
-    }
-
     fn load_stdio(env: &MapEnv) -> anyhow::Result<ServerConfig> {
         ServerConfig::load_with_env(None, &ServerOverrides::default(), env, Transport::Stdio)
-    }
-
-    /// Parses `flags` as the server's command line and returns its overrides.
-    fn cli_overrides(flags: &[&str]) -> ServerOverrides {
-        use clap::Parser;
-
-        let argv = std::iter::once("fontgres-mcp").chain(flags.iter().copied());
-        crate::shared::Args::try_parse_from(argv)
-            .unwrap()
-            .overrides()
-    }
-
-    #[test]
-    fn server_config_debug_masks_the_api_key_too() {
-        let mut config = ServerConfig::default();
-        config.core.api_key = Some(SecretString::from("upstream-api-key"));
-        let debug_output = format!("{config:?}");
-        assert!(!debug_output.contains("upstream-api-key"), "{debug_output}");
-        assert!(debug_output.contains(MASKED_VALUE), "{debug_output}");
     }
 
     #[test]
@@ -194,43 +151,32 @@ mod tests {
     }
 
     #[test]
-    fn max_response_bytes_env_override_applies() {
-        let (_directory, env) = isolated_env();
+    fn max_response_bytes_env_beats_toml() {
+        let (_directory, env) = env_with_toml("[mcp]\nmax_response_bytes = 2048\n");
+        assert_eq!(load_stdio(&env).unwrap().mcp.max_response_bytes, 2048);
         let env = env.with("FONTGRES_MCP_MAX_RESPONSE_BYTES", "4096");
-        let config = load_stdio(&env).unwrap();
-        assert_eq!(config.mcp.max_response_bytes, 4096);
+        assert_eq!(load_stdio(&env).unwrap().mcp.max_response_bytes, 4096);
     }
 
     #[test]
-    fn confirm_destructive_defaults_true_and_toml_and_env_override() {
-        assert!(ServerConfig::default().mcp.confirm_destructive);
-
-        let (_toml_directory, toml_env) = env_with_toml("[mcp]\nconfirm_destructive = false\n");
-        assert!(!load_stdio(&toml_env).unwrap().mcp.confirm_destructive);
-        let toml_env = toml_env.with(ENV_MCP_CONFIRM_DESTRUCTIVE, "true");
-        assert!(load_stdio(&toml_env).unwrap().mcp.confirm_destructive);
-
+    fn invalid_max_response_bytes_env_fails_naming_variable_and_value() {
         let (_directory, env) = isolated_env();
-        let env = env.with(ENV_MCP_CONFIRM_DESTRUCTIVE, "false");
-        let config =
-            ServerConfig::load_with_env(None, &ServerOverrides::default(), &env, Transport::Stdio)
-                .unwrap();
-        assert!(
-            !config.mcp.confirm_destructive,
-            "stdio honours the setting too"
-        );
-    }
-
-    #[test]
-    fn invalid_confirm_destructive_env_fails_naming_variable_and_value() {
-        let (_directory, env) = isolated_env();
-        let env = env.with(ENV_MCP_CONFIRM_DESTRUCTIVE, "sometimes");
+        let env = env.with("FONTGRES_MCP_MAX_RESPONSE_BYTES", "lots");
         let err = load_stdio(&env).unwrap_err();
         assert!(
             err.to_string()
-                .contains(r#"invalid FONTGRES_MCP_CONFIRM_DESTRUCTIVE value "sometimes""#),
+                .contains(r#"invalid FONTGRES_MCP_MAX_RESPONSE_BYTES value "lots""#),
             "{err}"
         );
+    }
+
+    #[test]
+    fn core_tables_load_from_the_same_file() {
+        let (_directory, env) =
+            env_with_toml("[fonts]\nsystem = false\n[mcp]\nmax_response_bytes = 10\n");
+        let config = load_stdio(&env).unwrap();
+        assert!(!config.core.fonts.system);
+        assert_eq!(config.mcp.max_response_bytes, 10);
     }
 
     #[test]
@@ -249,26 +195,5 @@ mod tests {
                 .contains(&format!("config file {} does not exist", missing.display())),
             "{err}"
         );
-    }
-
-    #[test]
-    fn cli_api_key_wins_without_reading_env_api_key_file() {
-        let (directory, env) = isolated_env();
-        let env = env.with("FONTGRES_API_KEY_FILE", missing_file(&directory));
-        let overrides = cli_overrides(&["--api-key", "cli-key"]);
-        let config = ServerConfig::load_with_env(None, &overrides, &env, Transport::Stdio).unwrap();
-        assert_eq!(
-            expose_secret_opt(config.core.api_key.as_ref()),
-            Some("cli-key")
-        );
-    }
-
-    #[test]
-    fn cli_base_url_beats_env_and_toml_base_url() {
-        let (_directory, env) = env_with_toml("base_url = \"https://toml.example.test\"\n");
-        let env = env.with("FONTGRES_BASE_URL", "https://env.example.test");
-        let overrides = cli_overrides(&["--base-url", "https://cli.example.test"]);
-        let config = ServerConfig::load_with_env(None, &overrides, &env, Transport::Stdio).unwrap();
-        assert_eq!(config.core.base_url, "https://cli.example.test");
     }
 }

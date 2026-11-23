@@ -1,10 +1,8 @@
-//! `fontgres`: terminal CLI for the FONTGRES API.
+//! `fontgres`: query the fonts installed on this machine from the terminal.
 
 #![doc = include_str!("../README.md")]
 
-mod commands;
 mod output;
-mod utils;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::CompleteEnv;
@@ -15,15 +13,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::commands::{item, status};
-use crate::utils::client;
+use anyhow::Context as _;
 use fontgres_core::cli::{self, CompletionShell};
+use fontgres_core::{Config, ConfigOverrides};
 
 /// Applies when neither `-v`/`-q`, `FONTGRES_LOG_LEVEL` nor `[log] level` sets one.
 const DEFAULT_LOG_LEVEL: LevelFilter = LevelFilter::ERROR;
 
 #[derive(Parser)]
-#[command(name = "fontgres", about = "FONTGRES from the terminal", version)]
+#[command(
+    name = "fontgres",
+    about = "Query installed fonts from the terminal",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -41,21 +43,6 @@ struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
-    /// Override the upstream base URL.
-    #[arg(long, global = true)]
-    base_url: Option<String>,
-
-    #[expect(
-        clippy::doc_markdown,
-        reason = "clap renders this doc comment verbatim as --help text, so backticks would show"
-    )]
-    /// Override the API key.
-    ///
-    /// Prefer FONTGRES_API_KEY or config to avoid exposing the key in process
-    /// listings (e.g. `ps`).
-    #[arg(long, global = true)]
-    api_key: Option<String>,
-
     /// Logging verbosity: `-v` warn, `-vv` info, `-vvv` debug, `-vvvv` trace;
     /// `-q` silences output. When passed, overrides `FONTGRES_LOG_LEVEL` and
     /// `[log] level`; with none of them set, only errors are reported. Place
@@ -67,13 +54,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Show server status.
-    Status,
-    /// Manage items.
-    Item {
-        #[command(subcommand)]
-        command: item::ItemCommand,
-    },
     /// Generate a shell completion script (bash, elvish, fish, nushell,
     /// powershell, zsh).
     Completions {
@@ -91,13 +71,12 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Dynamic completions: `COMPLETE=<shell> fontgres`. A no-op for normal runs; exits
     // the process when handling a completion request, so it must precede any stdout use.
     CompleteEnv::with_factory(Cli::command).complete();
 
-    match try_main().await {
+    match try_main() {
         Ok(()) => ExitCode::SUCCESS,
         // A closed stdout pipe (`... | head`) means the reader is done, not a failure.
         Err(error) if error.is::<StdoutClosed>() => ExitCode::SUCCESS,
@@ -117,26 +96,23 @@ fn report_fatal_error(error: &anyhow::Error) {
     eprintln!("fontgres: {error:#}");
 }
 
-async fn try_main() -> anyhow::Result<()> {
+fn try_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Static completion scripts need no config or API client, so emit and return early.
+    // Static completion scripts need no config or fonts, so emit and return early.
     if let Command::Completions { shell } = &cli.command {
         cli::write_completions(*shell, Cli::command());
         return Ok(());
     }
 
-    // Man pages need no config or API client, so emit and return early.
+    // Man pages need no config or fonts, so emit and return early.
     if let Command::Man { out_dir } = &cli.command {
         cli::write_man_pages(Cli::command(), out_dir)?;
         return Ok(());
     }
 
-    let config = client::load_config(
-        cli.config.as_deref(),
-        cli.base_url.as_deref(),
-        cli.api_key.as_deref(),
-    )?;
+    let config = Config::load(cli.config.as_deref(), &ConfigOverrides::default())
+        .context("loading config")?;
 
     // Default level precedence: explicit `-v`/`-q` overrides config `log.level`,
     // which overrides `error`; `RUST_LOG` (via `try_from_default_env`) still
@@ -158,12 +134,8 @@ async fn try_main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let client = client::build_client(config)?;
-
     match &cli.command {
-        Command::Status => status::run(&client, cli.output).await,
-        Command::Item { command } => item::run(command, &client, cli.output).await,
-        // Handled by the early returns above; the client is never built for them.
+        // Handled by the early returns above.
         Command::Completions { .. } | Command::Man { .. } => Ok(()),
     }
 }

@@ -1,21 +1,33 @@
-# FONTGRES example configuration
+# fontgres example configuration
 #
 # Copy to ~/.config/fontgres/config.toml, or pass --config / FONTGRES_CONFIG (a file
 # named either way must exist; the default location may be absent).
-# Precedence: CLI flag > FONTGRES_* env > FONTGRES_*_FILE env > this file > defaults.
-# A secret is read only from the layer that wins, so a lower layer's *_file is
-# never opened. Invalid values fail at startup naming their source; TOML errors
-# give the line and column but never echo the line, which may hold a secret.
+# Precedence: CLI flag > FONTGRES_* env > this file > defaults.
+# A list (dirs, files) is taken whole from the highest layer that sets it.
+# Invalid values fail at startup naming their source.
 
-# Upstream API base URL. Env: FONTGRES_BASE_URL
-base_url = "http://localhost:8080"
+[fonts]
+# Load the fonts installed on this system. Env: FONTGRES_FONTS_SYSTEM
+# CLI: --no-system-fonts
+system = true
 
-# API key sent as the X-Api-Key header. Env: FONTGRES_API_KEY
-# api_key = "your-api-key"
+# Directories scanned recursively for font files.
+# Env: FONTGRES_FONTS_DIRS (path list, ':'-separated; ';' on Windows)
+# CLI: --font-dir (repeatable)
+dirs = []
 
-# Secret-file alternative (Docker secret convention; trimmed on read).
-# Mutually exclusive with api_key. Env: FONTGRES_API_KEY_FILE
-# api_key_file = "/run/secrets/fontgres-api-key"
+# Individual font files.
+# Env: FONTGRES_FONTS_FILES (path list); CLI: --font-file (repeatable)
+files = []
+
+[fonts.generic]
+# Families the CSS generic names resolve to; unset keeps the built-in default.
+# Env: FONTGRES_FONTS_GENERIC_SERIF, _SANS_SERIF, _CURSIVE, _FANTASY, _MONOSPACE
+# serif = "Times New Roman"
+# sans_serif = "Arial"
+# cursive = "Comic Sans MS"
+# fantasy = "Impact"
+# monospace = "Courier New"
 
 [log]
 # trace|debug|info|warn|error|off. Env: FONTGRES_LOG_LEVEL
@@ -24,19 +36,8 @@ base_url = "http://localhost:8080"
 # warning and falls back to the binary's default.
 # level = "info"
 
-[http]
-# Env: FONTGRES_HTTP_REQUEST_TIMEOUT_SECS / FONTGRES_HTTP_CONNECT_TIMEOUT_SECS
-request_timeout_secs = 30
-connect_timeout_secs = 10
-
 [mcp]
 # Cap on the whole serialized tool result (bytes); oversized results are
 # replaced with a bounded `response_too_large` error, or fail with a protocol
 # error when even that cannot fit. Env: FONTGRES_MCP_MAX_RESPONSE_BYTES
 # max_response_bytes = 1048576  # default: 1 MiB
-
-# Ask the user to confirm destructive tools, for clients on MCP 2026-07-28
-# with form elicitation; other clients run them directly.
-# Env: FONTGRES_MCP_CONFIRM_DESTRUCTIVE
-# confirm_destructive = true
-

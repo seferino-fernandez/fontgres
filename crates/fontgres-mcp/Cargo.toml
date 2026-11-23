@@ -5,10 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Model Context Protocol server exposing the FONTGRES API to LLM clients"
+description = "Model Context Protocol server for querying installed fonts"
 readme = "README.md"
-keywords = ["mcp", "mcp-server", "llm", "ai", "api"]
-categories = ["api-bindings", "web-programming::http-server", "development-tools"]
+keywords = ["mcp", "mcp-server", "llm", "font", "fontdb"]
+categories = ["text-processing", "development-tools"]
 
 [[bin]]
 name = "fontgres-mcp"
@@ -32,19 +32,15 @@ rmcp = {
     "transport-io",
     "macros",
     "schemars",
-    "request-state",
   ]
 }
 schemars.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util"] }
-base64.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
-wiremock.workspace = true
 
 [lints]
 workspace = true

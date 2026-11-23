@@ -1,38 +1,25 @@
 //! Configuration loading with layered precedence:
-//! **CLI flag → `FONTGRES_*` env → `FONTGRES_*_FILE` env → `config.toml` → defaults.**
+//! **CLI flag → `FONTGRES_*` env → `config.toml` → defaults.**
 //!
 //! CLI flags arrive as [`ConfigOverrides`], the top layer, so the loader
-//! applies every layer itself. For the API key only the winning layer is read,
-//! so a lower layer's `*_FILE` secret (Docker secret convention) is never
-//! opened. Secret files are read at load time and trimmed.
+//! applies every layer itself. A list setting (font directories or files) is
+//! taken whole from the highest layer that sets it; layers are never merged.
 
 use crate::Result;
-use crate::env::{Env, SystemEnv, env_non_empty, env_parse};
+use crate::env::{Env, SystemEnv, env_non_empty, env_parse_bool};
 use crate::error::ConfigError;
-use crate::secret::SecretString;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use tracing::level_filters::LevelFilter;
 
-/// Default upstream base URL (override per project / via `--base-url`).
-const DEFAULT_BASE_URL: &str = "http://localhost:8080";
-/// Default total-request timeout.
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-/// Default TCP connect timeout.
-const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
-
-/// Top-level configuration for the API client.
-#[derive(Debug, Clone)]
+/// Top-level configuration shared by the workspace binaries.
+#[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// Upstream API base URL (no trailing slash required).
-    pub base_url: String,
-    /// API key sent as the `X-Api-Key` header. `None` until resolved.
-    pub api_key: Option<SecretString>,
     /// Logging settings.
     pub log: LogConfig,
-    /// HTTP transport timeouts.
-    pub http: HttpConfig,
+    /// Which fonts to load into the database.
+    pub fonts: FontsConfig,
 }
 
 /// Logging configuration.
@@ -95,60 +82,81 @@ impl LogConfig {
     }
 }
 
-/// HTTP timeout configuration.
-#[derive(Debug, Clone)]
-pub struct HttpConfig {
-    /// Total request timeout in seconds.
-    pub request_timeout_secs: u64,
-    /// TCP connect timeout in seconds.
-    pub connect_timeout_secs: u64,
+/// Which fonts the binaries load into a font database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontsConfig {
+    /// Whether to load the fonts installed on the system. Defaults to `true`.
+    pub system: bool,
+    /// Directories to scan recursively for font files.
+    pub dirs: Vec<PathBuf>,
+    /// Individual font files to load.
+    pub files: Vec<PathBuf>,
+    /// Families that CSS generic family names resolve to.
+    pub generic: GenericFamilies,
 }
 
-impl Default for Config {
+impl Default for FontsConfig {
     fn default() -> Self {
         Self {
-            base_url: DEFAULT_BASE_URL.to_string(),
-            api_key: None,
-            log: LogConfig::default(),
-            http: HttpConfig {
-                request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
-                connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
-            },
+            system: true,
+            dirs: Vec::new(),
+            files: Vec::new(),
+            generic: GenericFamilies::default(),
         }
     }
 }
 
+/// The family each CSS generic family name resolves to. `None` keeps the
+/// database's built-in default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericFamilies {
+    /// Family used for `serif`.
+    pub serif: Option<String>,
+    /// Family used for `sans-serif`.
+    pub sans_serif: Option<String>,
+    /// Family used for `cursive`.
+    pub cursive: Option<String>,
+    /// Family used for `fantasy`.
+    pub fantasy: Option<String>,
+    /// Family used for `monospace`.
+    pub monospace: Option<String>,
+}
+
 /// Explicit values that sit above every other layer, typically CLI flags.
 ///
-/// They beat `FONTGRES_*` env vars, `FONTGRES_*_FILE` vars and `config.toml`. A
-/// `Some` value wins verbatim, even when empty, and a winning `api_key` means
-/// no lower layer's secret file is read.
+/// A `Some` value or a non-empty list wins over `FONTGRES_*` env vars and
+/// `config.toml`.
 ///
 /// # Examples
 ///
 /// ```
+/// use std::path::PathBuf;
 /// use fontgres_core::env::MapEnv;
-/// use fontgres_core::{Config, ConfigOverrides, SecretString};
+/// use fontgres_core::{Config, ConfigOverrides};
 ///
 /// let overrides = ConfigOverrides {
-///     base_url: Some("https://fontgres.example.test".into()),
-///     api_key: Some(SecretString::from("cli-key")),
+///     system: Some(false),
+///     dirs: vec![PathBuf::from("/opt/fonts")],
+///     ..ConfigOverrides::default()
 /// };
 /// let config_file = tempfile::NamedTempFile::new()?;
 /// let env = MapEnv::new()
 ///     .with("FONTGRES_CONFIG", config_file.path().to_string_lossy())
-///     .with("FONTGRES_API_KEY_FILE", "/nonexistent/api-key");
+///     .with("FONTGRES_FONTS_SYSTEM", "true");
 /// let config = Config::load_with_env(None, &overrides, &env)?;
-/// assert_eq!(config.base_url, "https://fontgres.example.test");
-/// assert_eq!(config.api_key.unwrap().expose_secret(), "cli-key");
+/// assert!(!config.fonts.system);
+/// assert_eq!(config.fonts.dirs, [PathBuf::from("/opt/fonts")]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct ConfigOverrides {
-    /// Overrides the upstream API base URL (`--base-url`).
-    pub base_url: Option<String>,
-    /// Overrides the API key (`--api-key`).
-    pub api_key: Option<SecretString>,
+    /// Overrides whether system fonts load (`--no-system-fonts` sets `false`).
+    pub system: Option<bool>,
+    /// Overrides the font directories (`--font-dir`) when non-empty.
+    pub dirs: Vec<PathBuf>,
+    /// Overrides the font files (`--font-file`) when non-empty.
+    pub files: Vec<PathBuf>,
 }
 
 /// Identifies which layer named the configuration file path.
@@ -170,13 +178,10 @@ pub enum ConfigPathSource {
 /// On-disk TOML shape. All fields optional; missing fields use defaults.
 #[derive(Debug, Default, Deserialize)]
 struct ConfigFile {
-    base_url: Option<String>,
-    api_key: Option<String>,
-    api_key_file: Option<String>,
     #[serde(default)]
     log: LogFile,
     #[serde(default)]
-    http: HttpFile,
+    fonts: FontsFile,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -185,9 +190,46 @@ struct LogFile {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct HttpFile {
-    request_timeout_secs: Option<u64>,
-    connect_timeout_secs: Option<u64>,
+#[serde(deny_unknown_fields)]
+struct FontsFile {
+    system: Option<bool>,
+    dirs: Option<Vec<PathBuf>>,
+    files: Option<Vec<PathBuf>>,
+    #[serde(default)]
+    generic: GenericFamilies,
+}
+
+/// Environment variables for each [`GenericFamilies`] field.
+const GENERIC_FAMILY_ENV: [&str; 5] = [
+    "FONTGRES_FONTS_GENERIC_SERIF",
+    "FONTGRES_FONTS_GENERIC_SANS_SERIF",
+    "FONTGRES_FONTS_GENERIC_CURSIVE",
+    "FONTGRES_FONTS_GENERIC_FANTASY",
+    "FONTGRES_FONTS_GENERIC_MONOSPACE",
+];
+
+impl GenericFamilies {
+    /// Mutable access to each field, in [`GENERIC_FAMILY_ENV`] order.
+    fn fields_mut(&mut self) -> [&mut Option<String>; 5] {
+        [
+            &mut self.serif,
+            &mut self.sans_serif,
+            &mut self.cursive,
+            &mut self.fantasy,
+            &mut self.monospace,
+        ]
+    }
+}
+
+/// Splits a path-list variable (`:`-separated on Unix, `;` on Windows) into
+/// paths, dropping empty entries.
+fn env_paths(env: &impl Env, key: &str) -> Option<Vec<PathBuf>> {
+    let raw = env_non_empty(env, key)?;
+    Some(
+        std::env::split_paths(&raw)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect(),
+    )
 }
 
 impl Config {
@@ -202,16 +244,11 @@ impl Config {
     /// Returns [`Error::Config`](crate::Error::Config) holding a
     /// [`ConfigError`]: [`FileNotFound`](ConfigError::FileNotFound) when the
     /// file named by `path` or `FONTGRES_CONFIG` does not exist,
-    /// [`Parse`](ConfigError::Parse) when the TOML does not parse (reporting
-    /// line and column, never the source line),
-    /// [`ApiKeySourceConflict`](ConfigError::ApiKeySourceConflict) when both
-    /// `api_key` and `api_key_file` are set in the file,
-    /// [`BlankApiKey`](ConfigError::BlankApiKey) when the API key that wins
-    /// is empty or only whitespace, or
+    /// [`Parse`](ConfigError::Parse) when the TOML does not parse, or
     /// [`InvalidEnvValue`](ConfigError::InvalidEnvValue) when a `FONTGRES_*`
     /// variable holds a value that does not parse. Returns
-    /// [`Error::Io`](crate::Error::Io) when a configuration or secret file
-    /// cannot be read.
+    /// [`Error::Io`](crate::Error::Io) when the configuration file cannot be
+    /// read.
     pub fn load(path: Option<&Path>, overrides: &ConfigOverrides) -> Result<Self> {
         Self::load_with_env(path, overrides, &SystemEnv)
     }
@@ -237,83 +274,57 @@ impl Config {
     ) -> Result<Self> {
         let file: ConfigFile = parse_resolved_config(resolved)?;
 
+        // TOML layer.
         let mut config = Config::default();
-        if let Some(v) = file.base_url {
-            config.base_url = v;
+        config.log.level = file.log.level;
+        if let Some(v) = file.fonts.system {
+            config.fonts.system = v;
         }
-        if let Some(v) = file.log.level {
-            config.log.level = Some(v);
+        if let Some(v) = file.fonts.dirs {
+            config.fonts.dirs = v;
         }
-        if let Some(v) = file.http.request_timeout_secs {
-            config.http.request_timeout_secs = v;
+        if let Some(v) = file.fonts.files {
+            config.fonts.files = v;
         }
-        if let Some(v) = file.http.connect_timeout_secs {
-            config.http.connect_timeout_secs = v;
-        }
+        config.fonts.generic = file.fonts.generic;
 
-        // API key from the highest layer that supplies one; lower layers unread.
-        config.api_key = Self::resolve_api_key(
-            overrides.api_key.clone(),
-            file.api_key,
-            file.api_key_file,
-            env,
-        )?;
-        if config
-            .api_key
-            .as_ref()
-            .is_some_and(|key| key.expose_secret().trim().is_empty())
-        {
-            return Err(ConfigError::BlankApiKey.into());
-        }
-
-        // Env overrides (highest precedence below CLI).
-        if let Some(v) = env_non_empty(env, "FONTGRES_BASE_URL") {
-            config.base_url = v;
-        }
+        // Env layer.
         if let Some(v) = env_non_empty(env, "FONTGRES_LOG_LEVEL") {
             config.log.level = Some(v);
         }
-        if let Some(v) = env_parse(env, "FONTGRES_HTTP_REQUEST_TIMEOUT_SECS")? {
-            config.http.request_timeout_secs = v;
+        if let Some(v) = env_parse_bool(env, "FONTGRES_FONTS_SYSTEM")? {
+            config.fonts.system = v;
         }
-        if let Some(v) = env_parse(env, "FONTGRES_HTTP_CONNECT_TIMEOUT_SECS")? {
-            config.http.connect_timeout_secs = v;
+        if let Some(v) = env_paths(env, "FONTGRES_FONTS_DIRS") {
+            config.fonts.dirs = v;
+        }
+        if let Some(v) = env_paths(env, "FONTGRES_FONTS_FILES") {
+            config.fonts.files = v;
+        }
+        for (field, key) in config
+            .fonts
+            .generic
+            .fields_mut()
+            .into_iter()
+            .zip(GENERIC_FAMILY_ENV)
+        {
+            if let Some(v) = env_non_empty(env, key) {
+                *field = Some(v);
+            }
         }
 
-        // CLI overrides (highest precedence).
-        if let Some(v) = &overrides.base_url {
-            config.base_url.clone_from(v);
+        // CLI layer (highest precedence).
+        if let Some(v) = overrides.system {
+            config.fonts.system = v;
+        }
+        if !overrides.dirs.is_empty() {
+            config.fonts.dirs.clone_from(&overrides.dirs);
+        }
+        if !overrides.files.is_empty() {
+            config.fonts.files.clone_from(&overrides.files);
         }
 
         Ok(config)
-    }
-
-    /// Resolves the API key from the highest layer that supplies one:
-    /// override → `FONTGRES_API_KEY` env → `FONTGRES_API_KEY_FILE` env → `api_key` or
-    /// `api_key_file` (toml). A `Some` override wins verbatim, even when empty,
-    /// and no lower layer is read; the caller then rejects an empty or
-    /// whitespace-only key.
-    fn resolve_api_key(
-        override_value: Option<SecretString>,
-        file_value: Option<String>,
-        file_path: Option<String>,
-        env: &impl Env,
-    ) -> Result<Option<SecretString>> {
-        if override_value.is_some() {
-            return Ok(override_value);
-        }
-        if let Some(v) = env_non_empty(env, "FONTGRES_API_KEY") {
-            return Ok(Some(SecretString::from(v)));
-        }
-        if let Some(p) = env_non_empty(env, "FONTGRES_API_KEY_FILE") {
-            return Ok(Some(read_secret_file(&p)?));
-        }
-        match (file_value, file_path) {
-            (Some(_), Some(_)) => Err(ConfigError::ApiKeySourceConflict.into()),
-            (Some(v), None) => Ok(Some(SecretString::from(v))),
-            (None, Some(p)) => Ok(Some(read_secret_file(&p)?)),
-            (None, None) => Ok(None),
-        }
     }
 
     /// Determines the config file path and the layer that named it: explicit
@@ -428,20 +439,10 @@ fn read_resolved_config(
 /// Builds the [`ConfigError::Parse`] for a TOML parse error in the file at
 /// `path`, whose message reads `line {line}, column {column}: {message}`.
 ///
-/// Uses [`toml::de::Error::message`] and [`toml::de::Error::span`] rather than
-/// `Display`, because `Display` quotes the offending source line, and a config
-/// line can hold a secret. Line and column are 1-based and computed over
-/// `text`; when the error has no span, both are zero and only the message is
-/// shown.
-///
-/// The message itself still quotes the offending value for serde type and
-/// value errors (``invalid type: integer `123456`, expected a string``), so a
-/// secret written with the wrong type would leak through it. Everything from
-/// the first `"` or `` ` `` up to serde's final `, expected …` tail, or to the
-/// end when that tail does not read as schema text, is therefore masked as
-/// [`MASKED_VALUE`](crate::secret::MASKED_VALUE); see [`mask_quoted_values`].
+/// Line and column are 1-based and computed over `text`; when the error has
+/// no span, both are zero and only the message is shown.
 fn toml_parse_error(path: PathBuf, text: &str, error: &toml::de::Error) -> ConfigError {
-    let message = mask_quoted_values(error.message());
+    let message = error.message().to_string();
     let (line, column) = error.span().map_or((0, 0), |span| {
         let before = text.get(..span.start).unwrap_or(text);
         // `split` yields one more piece than there are newlines, so the count
@@ -477,109 +478,6 @@ fn describe_toml_error(text: &str, error: &toml::de::Error) -> String {
     }
 }
 
-/// Masks the user's value in a serde message as
-/// [`MASKED_VALUE`](crate::secret::MASKED_VALUE), keeping serde's schema text.
-///
-/// Serde appends its expectation (variant or field names, a type) after the
-/// user's value, so the message is split at the last `, expected `, wherever it
-/// falls relative to quotes. The marker and everything after it are kept
-/// verbatim only when that tail has one of serde's schema forms (see
-/// [`is_schema_tail`]): ``unknown variant `********`, expected one of `token`,
-/// `oauth` ``. When it does not, the marker belongs to the user's value, as in
-/// ``unknown field `x, expected S`, there are no fields``, and the split is
-/// ignored. Without a kept tail the whole message is the part to mask.
-///
-/// In that part, everything from the first `"` or `` ` `` to the end is masked
-/// as one span, keeping the opening delimiter and, when the part ends with it,
-/// the closing one. Delimiters are not paired, because serde does not escape a
-/// `` ` `` inside a backtick-quoted value, so a value holding one could
-/// otherwise close the span early and leave the rest of itself in clear.
-///
-/// One case still leaks: a value that itself ends in `, expected ` followed by
-/// a schema form, in a message where serde appends no expected clause of its
-/// own. The value ``x, expected `a`` quoted at the end of ``duplicate field
-/// `…` `` yields the tail `` `a` ``, a valid name list, so `a` stays in clear.
-fn mask_quoted_values(message: &str) -> String {
-    const EXPECTED: &str = ", expected ";
-    let (value, schema) = match message.rsplit_once(EXPECTED) {
-        Some((value, schema)) if is_schema_tail(schema) => (value, Some(schema)),
-        _ => (message, None),
-    };
-    let mut masked = String::with_capacity(message.len());
-    let mut rest = value.chars();
-    while let Some(c) = rest.next() {
-        masked.push(c);
-        if c == '"' || c == '`' {
-            masked.push_str(crate::secret::MASKED_VALUE);
-            if rest.as_str().ends_with(c) {
-                masked.push(c);
-            }
-            break;
-        }
-    }
-    if let Some(schema) = schema {
-        masked.push_str(EXPECTED);
-        masked.push_str(schema);
-    }
-    masked
-}
-
-/// Whether `tail`, the text after serde's `, expected `, has one of serde's
-/// schema forms.
-///
-/// The forms are a list of backtick-quoted names (`` `a` ``, `` `a` or `b` ``,
-/// ``one of `a`, `b`, `c` ``), each name drawn from `[A-Za-z0-9_.-]`, and a
-/// plain description such as `u16` or `an integer between 0 and 65535`, drawn
-/// from ASCII alphanumerics, spaces and `_-.,()`.
-fn is_schema_tail(tail: &str) -> bool {
-    is_name_list(tail.strip_prefix("one of ").unwrap_or(tail))
-        || (!tail.is_empty()
-            && tail.chars().all(|c| {
-                c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | ',' | '(' | ')')
-            }))
-}
-
-/// Whether `list` is one or more backtick-quoted names separated by `, `, with
-/// at most one ` or `, between the last two, and nothing after the last name.
-fn is_name_list(list: &str) -> bool {
-    let mut rest = list;
-    let mut after_or = false;
-    loop {
-        let Some((name, after_name)) = rest
-            .strip_prefix('`')
-            .and_then(|quoted| quoted.split_once('`'))
-        else {
-            return false;
-        };
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-        {
-            return false;
-        }
-        if after_name.is_empty() {
-            return true;
-        }
-        if after_or {
-            return false;
-        }
-        if let Some(next) = after_name.strip_prefix(" or ") {
-            after_or = true;
-            rest = next;
-        } else if let Some(next) = after_name.strip_prefix(", ") {
-            rest = next;
-        } else {
-            return false;
-        }
-    }
-}
-
-/// Reads a secret from a file, trimming trailing whitespace/newlines.
-fn read_secret_file(path: &str) -> Result<SecretString> {
-    let raw = std::fs::read_to_string(path)?;
-    Ok(SecretString::from(raw.trim().to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,224 +497,169 @@ mod tests {
         Config::load_with_env(Some(path), overrides, env)
     }
 
-    fn missing_secret(directory: &tempfile::TempDir) -> String {
-        directory
-            .path()
-            .join("missing-secret")
+    fn paths(items: &[&str]) -> Vec<PathBuf> {
+        items.iter().map(PathBuf::from).collect()
+    }
+
+    /// Joins `items` with the platform's path-list separator.
+    fn path_list(items: &[&str]) -> String {
+        std::env::join_paths(items)
+            .unwrap()
             .to_string_lossy()
             .into_owned()
     }
 
     #[test]
-    fn env_api_key_beats_file_value() {
-        let env = MapEnv::new().with("FONTGRES_API_KEY", "from-env");
-        let key = Config::resolve_api_key(None, Some("from-toml".into()), None, &env)
-            .unwrap()
-            .unwrap();
-        assert_eq!(key.expose_secret(), "from-env");
-    }
-
-    #[test]
-    fn toml_value_and_file_conflict_errors() {
-        let env = MapEnv::new();
-        let err = Config::resolve_api_key(None, Some("a".into()), Some("/tmp/x".into()), &env)
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            Error::Config(ConfigError::ApiKeySourceConflict)
-        ));
-    }
-
-    #[test]
-    fn base_url_env_overrides_default() {
-        let (_directory, path) = config_file("");
-        let env = MapEnv::new().with("FONTGRES_BASE_URL", "https://api.example.test");
-        let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
-        assert_eq!(config.base_url, "https://api.example.test");
-    }
-
-    #[test]
-    fn api_key_file_is_read_and_trimmed() {
-        use std::io::Write;
-
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        write!(file, "  secret-key\n\n").unwrap();
-        let path = file.path().to_str().unwrap().to_string();
-
-        let env = MapEnv::new().with("FONTGRES_API_KEY_FILE", path);
-        let key = Config::resolve_api_key(None, None, None, &env)
-            .unwrap()
-            .unwrap();
-        assert_eq!(key.expose_secret(), "secret-key");
+    fn defaults_load_system_fonts_only() {
+        let fonts = Config::default().fonts;
+        assert!(fonts.system);
+        assert!(fonts.dirs.is_empty());
+        assert!(fonts.files.is_empty());
+        assert_eq!(fonts.generic, GenericFamilies::default());
     }
 
     #[test]
     fn toml_layer_applies_when_nothing_overrides_it() {
         let (_directory, path) = config_file(
-            "base_url = \"https://toml.example.test\"\napi_key = \"toml-key\"\n\
-             [log]\nlevel = \"warn\"\n[http]\nrequest_timeout_secs = 45\n",
+            "[log]\nlevel = \"warn\"\n\
+             [fonts]\nsystem = false\ndirs = [\"/a\", \"/b\"]\nfiles = [\"/c.ttf\"]\n\
+             [fonts.generic]\nserif = \"Noto Serif\"\nmonospace = \"Iosevka\"\n",
         );
         let config = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap();
-        assert_eq!(config.base_url, "https://toml.example.test");
-        assert_eq!(config.api_key.unwrap().expose_secret(), "toml-key");
         assert_eq!(config.log.level.as_deref(), Some("warn"));
-        assert_eq!(config.http.request_timeout_secs, 45);
+        assert!(!config.fonts.system);
+        assert_eq!(config.fonts.dirs, paths(&["/a", "/b"]));
+        assert_eq!(config.fonts.files, paths(&["/c.ttf"]));
+        assert_eq!(config.fonts.generic.serif.as_deref(), Some("Noto Serif"));
+        assert_eq!(config.fonts.generic.monospace.as_deref(), Some("Iosevka"));
+        assert_eq!(config.fonts.generic.sans_serif, None);
     }
 
     #[test]
-    fn env_api_key_file_beats_toml_api_key() {
-        let (directory, path) = config_file("api_key = \"toml-key\"\n");
-        let secret = directory.path().join("api-key");
-        std::fs::write(&secret, "file-key\n").unwrap();
-        let env = MapEnv::new().with("FONTGRES_API_KEY_FILE", secret.to_string_lossy());
-        let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
-        assert_eq!(config.api_key.unwrap().expose_secret(), "file-key");
-    }
-
-    #[test]
-    fn env_api_key_beats_env_api_key_file_without_reading_it() {
-        let (directory, path) = config_file("");
-        let env = MapEnv::new()
-            .with("FONTGRES_API_KEY", "env-key")
-            .with("FONTGRES_API_KEY_FILE", missing_secret(&directory));
-        let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
-        assert_eq!(config.api_key.unwrap().expose_secret(), "env-key");
-    }
-
-    #[test]
-    fn env_api_key_beats_toml_api_key_file_without_reading_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let toml = format!("api_key_file = {:?}\n", missing_secret(&directory));
-        let (_config_directory, path) = config_file(&toml);
-        let env = MapEnv::new().with("FONTGRES_API_KEY", "env-key");
-        let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
-        assert_eq!(config.api_key.unwrap().expose_secret(), "env-key");
-    }
-
-    #[test]
-    fn api_key_override_wins_without_reading_env_api_key_file() {
-        let (directory, path) = config_file("api_key = \"toml-key\"\n");
-        let env = MapEnv::new()
-            .with("FONTGRES_API_KEY", "env-key")
-            .with("FONTGRES_API_KEY_FILE", missing_secret(&directory));
-        let overrides = ConfigOverrides {
-            api_key: Some(SecretString::from("cli-key")),
-            ..ConfigOverrides::default()
-        };
-        let config = load(&path, &overrides, &env).unwrap();
-        assert_eq!(config.api_key.unwrap().expose_secret(), "cli-key");
-    }
-
-    #[test]
-    fn empty_api_key_override_wins_and_is_rejected() {
-        // The empty override still wins: no lower layer is read, not even the
-        // missing FONTGRES_API_KEY_FILE, and the blank key is then refused rather
-        // than replaced by the env or TOML key.
-        let (directory, path) = config_file("api_key = \"from-toml\"\n");
-        let env = MapEnv::new()
-            .with("FONTGRES_API_KEY", "from-env")
-            .with("FONTGRES_API_KEY_FILE", missing_secret(&directory));
-        for blank in ["", " ", "\t\n"] {
-            let overrides = ConfigOverrides {
-                api_key: Some(SecretString::from(blank)),
-                ..ConfigOverrides::default()
-            };
-            let err = load(&path, &overrides, &env).unwrap_err();
-            assert!(
-                matches!(err, Error::Config(ConfigError::BlankApiKey)),
-                "{blank:?}: {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn whitespace_api_key_from_env_toml_or_file_is_rejected_naming_the_sources() {
-        let (directory, secret_path) = config_file(" \n");
-        for (toml, env) in [
-            (String::new(), MapEnv::new().with("FONTGRES_API_KEY", "  ")),
-            ("api_key = \" \"\n".to_string(), MapEnv::new()),
-            (
-                format!("api_key_file = {:?}\n", secret_path.display().to_string()),
-                MapEnv::new(),
-            ),
-        ] {
-            let path = directory.path().join("main.toml");
-            std::fs::write(&path, &toml).unwrap();
-            let err = load(&path, &ConfigOverrides::default(), &env).unwrap_err();
-            let message = err.to_string();
-            assert!(
-                matches!(err, Error::Config(ConfigError::BlankApiKey)),
-                "{toml}: {err:?}"
-            );
-            for source in [
-                "FONTGRES_API_KEY",
-                "FONTGRES_API_KEY_FILE",
-                "--api-key",
-                "api_key",
-            ] {
-                assert!(message.contains(source), "{message}");
-            }
-        }
-    }
-
-    #[test]
-    fn base_url_override_beats_env_and_toml() {
-        let (_directory, path) = config_file("base_url = \"https://toml.example.test\"\n");
-        let env = MapEnv::new().with("FONTGRES_BASE_URL", "https://env.example.test");
-        let overrides = ConfigOverrides {
-            base_url: Some("https://cli.example.test".into()),
-            ..ConfigOverrides::default()
-        };
-        let config = load(&path, &overrides, &env).unwrap();
-        assert_eq!(config.base_url, "https://cli.example.test");
-    }
-
-    #[test]
-    fn env_beats_toml_for_log_level_and_timeouts() {
+    fn env_beats_toml() {
         let (_directory, path) = config_file(
-            "[log]\nlevel = \"warn\"\n[http]\nrequest_timeout_secs = 45\nconnect_timeout_secs = 5\n",
+            "[log]\nlevel = \"warn\"\n[fonts]\nsystem = false\ndirs = [\"/toml\"]\n\
+             files = [\"/toml.ttf\"]\n[fonts.generic]\nserif = \"Toml Serif\"\n",
         );
         let env = MapEnv::new()
             .with("FONTGRES_LOG_LEVEL", "debug")
-            .with("FONTGRES_HTTP_REQUEST_TIMEOUT_SECS", "60")
-            .with("FONTGRES_HTTP_CONNECT_TIMEOUT_SECS", " 3\n");
+            .with("FONTGRES_FONTS_SYSTEM", " yes\n")
+            .with("FONTGRES_FONTS_DIRS", path_list(&["/env/a", "/env/b"]))
+            .with("FONTGRES_FONTS_FILES", path_list(&["/env.otf"]))
+            .with("FONTGRES_FONTS_GENERIC_SERIF", "Env Serif")
+            .with("FONTGRES_FONTS_GENERIC_SANS_SERIF", "Env Sans")
+            .with("FONTGRES_FONTS_GENERIC_CURSIVE", "Env Cursive")
+            .with("FONTGRES_FONTS_GENERIC_FANTASY", "Env Fantasy")
+            .with("FONTGRES_FONTS_GENERIC_MONOSPACE", "Env Mono");
         let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
         assert_eq!(config.log.level.as_deref(), Some("debug"));
-        assert_eq!(config.http.request_timeout_secs, 60);
-        assert_eq!(config.http.connect_timeout_secs, 3);
-    }
-
-    #[test]
-    fn blank_timeout_env_keeps_toml_value() {
-        let (_directory, path) = config_file("[http]\nrequest_timeout_secs = 45\n");
-        for blank in ["", " \t "] {
-            let env = MapEnv::new().with("FONTGRES_HTTP_REQUEST_TIMEOUT_SECS", blank);
-            let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
-            assert_eq!(config.http.request_timeout_secs, 45, "{blank:?}");
-        }
-    }
-
-    #[test]
-    fn invalid_timeout_env_fails_naming_variable_and_value() {
-        let (_directory, path) = config_file("");
-        for var in [
-            "FONTGRES_HTTP_REQUEST_TIMEOUT_SECS",
-            "FONTGRES_HTTP_CONNECT_TIMEOUT_SECS",
-        ] {
-            for raw in ["xyz", "-1", "1.5"] {
-                let env = MapEnv::new().with(var, raw);
-                let err = load(&path, &ConfigOverrides::default(), &env).unwrap_err();
-                assert!(
-                    matches!(err, Error::Config(ConfigError::InvalidEnvValue { .. })),
-                    "{var}={raw}: {err:?}"
-                );
-                let message = err.to_string();
-                assert!(
-                    message.contains(&format!("invalid {var} value {raw:?}")),
-                    "{var}={raw}: {message}"
-                );
+        assert!(config.fonts.system);
+        assert_eq!(config.fonts.dirs, paths(&["/env/a", "/env/b"]));
+        assert_eq!(config.fonts.files, paths(&["/env.otf"]));
+        assert_eq!(
+            config.fonts.generic,
+            GenericFamilies {
+                serif: Some("Env Serif".into()),
+                sans_serif: Some("Env Sans".into()),
+                cursive: Some("Env Cursive".into()),
+                fantasy: Some("Env Fantasy".into()),
+                monospace: Some("Env Mono".into()),
             }
-        }
+        );
+    }
+
+    #[test]
+    fn blank_env_keeps_toml_values() {
+        let (_directory, path) = config_file(
+            "[fonts]\nsystem = false\ndirs = [\"/toml\"]\n[fonts.generic]\nserif = \"S\"\n",
+        );
+        let env = MapEnv::new()
+            .with("FONTGRES_FONTS_SYSTEM", " \t ")
+            .with("FONTGRES_FONTS_DIRS", "")
+            .with("FONTGRES_FONTS_GENERIC_SERIF", "");
+        let config = load(&path, &ConfigOverrides::default(), &env).unwrap();
+        assert!(!config.fonts.system);
+        assert_eq!(config.fonts.dirs, paths(&["/toml"]));
+        assert_eq!(config.fonts.generic.serif.as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn invalid_system_env_fails_naming_variable_and_value() {
+        let (_directory, path) = config_file("");
+        let env = MapEnv::new().with("FONTGRES_FONTS_SYSTEM", "maybe");
+        let err = load(&path, &ConfigOverrides::default(), &env).unwrap_err();
+        assert!(
+            matches!(err, Error::Config(ConfigError::InvalidEnvValue { .. })),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(r#"invalid FONTGRES_FONTS_SYSTEM value "maybe""#),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn overrides_beat_env_and_toml() {
+        let (_directory, path) =
+            config_file("[fonts]\nsystem = true\ndirs = [\"/toml\"]\nfiles = [\"/toml.ttf\"]\n");
+        let env = MapEnv::new()
+            .with("FONTGRES_FONTS_SYSTEM", "true")
+            .with("FONTGRES_FONTS_DIRS", "/env")
+            .with("FONTGRES_FONTS_FILES", "/env.ttf");
+        let overrides = ConfigOverrides {
+            system: Some(false),
+            dirs: paths(&["/cli"]),
+            files: paths(&["/cli.ttf"]),
+        };
+        let config = load(&path, &overrides, &env).unwrap();
+        assert!(!config.fonts.system);
+        assert_eq!(config.fonts.dirs, paths(&["/cli"]));
+        assert_eq!(config.fonts.files, paths(&["/cli.ttf"]));
+    }
+
+    #[test]
+    fn empty_override_lists_keep_lower_layers() {
+        let (_directory, path) = config_file("[fonts]\ndirs = [\"/toml\"]\n");
+        let config = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap();
+        assert_eq!(config.fonts.dirs, paths(&["/toml"]));
+        assert!(config.fonts.system);
+    }
+
+    #[test]
+    fn unknown_fonts_key_is_a_parse_error() {
+        let (_directory, path) = config_file("[fonts]\nunknown_key = false\n");
+        let err = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            matches!(err, Error::Config(ConfigError::Parse { .. })),
+            "{err:?}"
+        );
+        assert!(message.contains("unknown_key"), "{message}");
+    }
+
+    #[test]
+    fn missing_default_config_file_loads_defaults() {
+        // The default location is injected so the test never reads the real home config.
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("config.toml");
+        let config = Config::load_resolved(
+            Some((missing, ConfigPathSource::Default)),
+            &ConfigOverrides::default(),
+            &MapEnv::new(),
+        )
+        .unwrap();
+        assert_eq!(config.fonts, FontsConfig::default());
+        assert!(config.log.level.is_none());
+    }
+
+    #[test]
+    fn toml_syntax_error_reports_path_and_position() {
+        let (_directory, path) = config_file("[fonts]\nsystem = true junk\n");
+        let err = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains("line 2, column "), "{message}");
     }
 
     #[test]
@@ -877,21 +720,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_default_config_file_loads_defaults() {
-        // The default location is injected so the test never reads the real home config.
-        let directory = tempfile::tempdir().unwrap();
-        let missing = directory.path().join("config.toml");
-        let config = Config::load_resolved(
-            Some((missing, ConfigPathSource::Default)),
-            &ConfigOverrides::default(),
-            &MapEnv::new(),
-        )
-        .unwrap();
-        assert_eq!(config.base_url, DEFAULT_BASE_URL);
-        assert!(config.api_key.is_none());
-    }
-
-    #[test]
     fn unreadable_explicit_config_file_keeps_io_error() {
         let directory = tempfile::tempdir().unwrap();
         let err = load(
@@ -904,232 +732,11 @@ mod tests {
     }
 
     #[test]
-    fn toml_syntax_error_reports_position_without_the_source_line() {
-        let (_directory, path) =
-            config_file("base_url = \"https://x.test\"\napi_key = \"SENTINEL-SECRET\" junk\n");
-        let err = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
-        let message = err.to_string();
-        assert!(!message.contains("SENTINEL"), "{message}");
-        assert!(message.contains(&path.display().to_string()), "{message}");
-        assert!(message.contains("line 2, column "), "{message}");
-    }
-
-    #[test]
-    fn toml_type_error_masks_the_offending_value() {
-        let (_directory, path) = config_file("api_key = 123456789\n");
-        let err = load(&path, &ConfigOverrides::default(), &MapEnv::new()).unwrap_err();
-        let message = err.to_string();
-        assert!(!message.contains("123456789"), "{message}");
-        assert!(message.contains("line 1, column 11"), "{message}");
-        assert!(message.contains("`********`"), "{message}");
-    }
-
-    #[test]
     fn describe_toml_error_without_a_span_is_the_message_alone() {
         use serde::de::Error as _;
 
         let err = toml::de::Error::custom("boom");
-        assert_eq!(describe_toml_error("api_key = \"k\"", &err), "boom");
-    }
-
-    #[test]
-    fn mask_quoted_values_masks_both_delimiters_and_an_unterminated_one() {
-        assert_eq!(
-            mask_quoted_values(r#"invalid type: string "SENTINEL", expected u16"#),
-            r#"invalid type: string "********", expected u16"#
-        );
-        assert_eq!(
-            mask_quoted_values("invalid type: integer `123456`, expected a string"),
-            "invalid type: integer `********`, expected a string"
-        );
-        assert_eq!(
-            mask_quoted_values(r#"invalid type: string "ab\"cd", expected u16"#),
-            r#"invalid type: string "********", expected u16"#
-        );
-        assert_eq!(
-            mask_quoted_values("invalid value: `secret, expected"),
-            "invalid value: `********"
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_keeps_the_expected_tail() {
-        assert_eq!(
-            mask_quoted_values(
-                "unknown variant `SENTINEL`, expected one of `token`, `oauth`, `none`"
-            ),
-            "unknown variant `********`, expected one of `token`, `oauth`, `none`"
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_masks_a_marker_inside_a_double_quoted_value() {
-        assert_eq!(
-            mask_quoted_values(r#"invalid type: string "a, expected SENTINEL", expected u16"#),
-            r#"invalid type: string "********", expected u16"#
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_masks_a_backtick_injected_marker() {
-        // Serde does not escape the backtick in the value ``x`, expected SECRET``.
-        let masked = mask_quoted_values(
-            "unknown variant `x`, expected SECRET`, expected one of `token`, `oauth`, `none`",
-        );
-        assert_eq!(
-            masked,
-            "unknown variant `********`, expected one of `token`, `oauth`, `none`"
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_without_a_marker_masks_from_the_first_delimiter() {
-        assert_eq!(
-            mask_quoted_values("unknown field `a`b`, there are no fields"),
-            "unknown field `********"
-        );
-        assert_eq!(
-            mask_quoted_values("missing field api_key"),
-            "missing field api_key"
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_masks_a_marker_followed_by_a_non_schema_tail() {
-        let masked = mask_quoted_values("unknown field `x, expected S`, there are no fields");
-        assert_eq!(masked, "unknown field `********");
-        assert!(!masked.contains('S'), "{masked}");
-    }
-
-    #[test]
-    fn mask_quoted_values_masks_a_tail_holding_a_quote_outside_a_list() {
-        assert_eq!(
-            mask_quoted_values(r#"invalid value: "a, expected u16", SECRET"#),
-            r#"invalid value: "********"#
-        );
-        assert_eq!(
-            mask_quoted_values("unknown variant `a, expected `token` SECRET`"),
-            "unknown variant `********`"
-        );
-    }
-
-    #[test]
-    fn mask_quoted_values_keeps_each_name_list_form() {
-        for tail in [
-            "one of `token`, `oauth`, `none`",
-            "`token` or `oauth`",
-            "`token`",
-        ] {
-            assert_eq!(
-                mask_quoted_values(&format!("unknown variant `SENTINEL`, expected {tail}")),
-                format!("unknown variant `********`, expected {tail}")
-            );
-        }
-    }
-
-    #[test]
-    fn mask_quoted_values_keeps_a_type_description() {
-        for tail in ["u16", "a string"] {
-            assert_eq!(
-                mask_quoted_values(&format!(
-                    r#"invalid type: string "SENTINEL", expected {tail}"#
-                )),
-                format!(r#"invalid type: string "********", expected {tail}"#)
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_variant_round_trip_keeps_the_expected_text_but_not_the_value() {
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "lowercase")]
-        enum Mode {
-            Token,
-            OAuth,
-            None,
-        }
-        #[derive(Debug, Deserialize)]
-        struct File {
-            #[expect(dead_code, reason = "only the parse error is under test")]
-            mode: Mode,
-        }
-
-        let text = "mode = \"SENTINEL\"\n";
-        let err = toml::from_str::<File>(text).unwrap_err();
-        assert_eq!(
-            describe_toml_error(text, &err),
-            "line 1, column 8: unknown variant `********`, expected one of `token`, `oauth`, `none`"
-        );
-    }
-
-    #[test]
-    fn wrong_type_round_trip_keeps_the_expected_text_but_not_the_value() {
-        #[derive(Debug, Deserialize)]
-        struct File {
-            #[expect(dead_code, reason = "only the parse error is under test")]
-            port: u16,
-        }
-
-        let text = "port = \"abc\"\n";
-        let err = toml::from_str::<File>(text).unwrap_err();
-        let described = describe_toml_error(text, &err);
-        assert!(!described.contains("abc"), "{described}");
-        assert_eq!(
-            described,
-            "line 1, column 8: invalid type: string \"********\", expected u16"
-        );
-    }
-
-    #[test]
-    fn backtick_injected_variant_names_the_valid_variants_but_not_the_value() {
-        #[derive(Debug, Default, Deserialize)]
-        #[serde(rename_all = "lowercase")]
-        enum Mode {
-            #[default]
-            Token,
-            OAuth,
-        }
-        #[derive(Debug, Default, Deserialize)]
-        struct File {
-            #[serde(default)]
-            #[expect(dead_code, reason = "only the parse error is under test")]
-            mode: Mode,
-        }
-
-        let text = "mode = \"x`, expected SECRET\"\n";
-        let err = toml::from_str::<File>(text).unwrap_err();
-        let described = describe_toml_error(text, &err);
-        assert!(!described.contains("SECRET"), "{described}");
-        assert!(
-            described.contains("expected `token` or `oauth`"),
-            "{described}"
-        );
-    }
-
-    #[test]
-    fn unknown_variant_error_names_the_valid_variants_but_not_the_value() {
-        #[derive(Debug, Default, Deserialize)]
-        #[serde(rename_all = "lowercase")]
-        enum Mode {
-            #[default]
-            Token,
-            OAuth,
-        }
-        #[derive(Debug, Default, Deserialize)]
-        struct File {
-            #[serde(default)]
-            #[expect(dead_code, reason = "only the parse error is under test")]
-            mode: Mode,
-        }
-
-        let text = "mode = \"SENTINEL-SECRET\"\n";
-        let err = toml::from_str::<File>(text).unwrap_err();
-        let described = describe_toml_error(text, &err);
-        assert!(!described.contains("SENTINEL"), "{described}");
-        assert!(
-            described.contains("expected `token` or `oauth`"),
-            "{described}"
-        );
+        assert_eq!(describe_toml_error("system = true", &err), "boom");
     }
 
     #[test]

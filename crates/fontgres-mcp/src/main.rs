@@ -1,5 +1,5 @@
-//! `fontgres-mcp`: Model Context Protocol server exposing the FONTGRES API as tools
-//! an LLM client can call.
+//! `fontgres-mcp`: Model Context Protocol server exposing the font database as
+//! tools an LLM client can call.
 //!
 //! Serves local MCP clients over standard input and output.
 

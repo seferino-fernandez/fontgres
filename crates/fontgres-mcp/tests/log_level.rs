@@ -10,9 +10,8 @@ use predicates::str::contains;
 const STARTUP_LINE: &str = "fontgres-mcp starting";
 
 /// Runs the stdio server against a config file holding `toml` and returns its
-/// stderr. The startup line is logged before the transport starts; with no API
-/// key configured the server exits right after it, so the run cannot hang.
-/// Empty stdin backs this up. The exit status is not asserted: only the
+/// stderr. The startup line is logged before the transport starts, and the
+/// server exits when it reads EOF on its empty stdin, so the run cannot hang. The exit status is not asserted: only the
 /// startup log matters.
 fn startup_stderr(toml: &str, configure: impl FnOnce(&mut Command)) -> String {
     let directory = tempfile::tempdir().unwrap();

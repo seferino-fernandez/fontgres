@@ -6,14 +6,14 @@ use clap_verbosity_flag::Verbosity;
 use crate::auth::Transport;
 use fontgres_core::cli::CompletionShell;
 
-use crate::config::{ServerConfig, ServerOverrides};
-use fontgres_core::{ConfigOverrides, SecretString};
+use crate::config::ServerOverrides;
+use fontgres_core::ConfigOverrides;
 
 /// CLI arguments for the MCP server.
 #[derive(Parser)]
 #[command(
     name = "fontgres-mcp",
-    about = "MCP server exposing the FONTGRES API",
+    about = "MCP server for querying installed fonts",
     version
 )]
 pub(crate) struct Args {
@@ -40,14 +40,6 @@ pub(crate) struct Args {
     /// still overrides everything.
     #[command(flatten)]
     pub verbosity: Verbosity,
-
-    /// Override the upstream base URL.
-    #[arg(long)]
-    pub base_url: Option<String>,
-
-    /// Override the API key.
-    #[arg(long)]
-    pub api_key: Option<String>,
 }
 
 /// Subcommands for the MCP server binary.
@@ -73,19 +65,10 @@ pub(crate) enum Command {
 impl Args {
     /// Returns the CLI flags as the loader's top layer.
     pub(crate) fn overrides(&self) -> ServerOverrides {
-        let secret = |value: &Option<String>| value.clone().map(SecretString::from);
         ServerOverrides {
-            core: ConfigOverrides {
-                base_url: self.base_url.clone(),
-                api_key: secret(&self.api_key),
-            },
+            core: ConfigOverrides::default(),
         }
     }
-}
-
-/// Builds an authenticated [`ApiClient`](fontgres_core::ApiClient) from config (eager; no login flow).
-pub(crate) fn create_api_client(config: &ServerConfig) -> anyhow::Result<fontgres_core::ApiClient> {
-    Ok(fontgres_core::ApiClient::new(config.core.clone())?)
 }
 
 #[cfg(test)]

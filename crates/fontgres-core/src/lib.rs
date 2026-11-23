@@ -1,39 +1,19 @@
-//! Async Rust client for the FONTGRES API.
-//!
-//! Construct an [`ApiClient`] from [`Config`] and call the example endpoint
-//! methods. Replace the example `models`, `api`, and `endpoints` with your own.
+//! Font database and shared configuration for the fontgres binaries.
 
 #![doc = include_str!("../README.md")]
 
-/// API path constants.
-pub mod api;
 /// Static shell completions and man pages for the workspace binaries.
 #[cfg(feature = "cli")]
 pub mod cli;
-/// The [`ApiClient`] HTTP wrapper.
-pub mod client;
 /// Configuration loading.
 pub mod config;
-/// Endpoint methods on [`ApiClient`].
-pub mod endpoints;
 /// Environment-variable source abstraction (testable).
 pub mod env;
 /// Error types.
 pub mod error;
-/// Response models.
-pub mod models;
-/// Pagination envelope.
-pub mod pagination;
-/// Credential redaction for presented output and error text.
-pub mod redact;
-/// Secret-string wrapper that redacts in `Debug`.
-pub mod secret;
 
-pub use client::ApiClient;
-pub use config::{Config, ConfigOverrides, ConfigPathSource};
+pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig, GenericFamilies};
 pub use error::{ConfigError, Error};
-pub use redact::Redacted;
-pub use secret::SecretString;
 
 /// Crate `Result` alias.
 pub type Result<T> = std::result::Result<T, Error>;
