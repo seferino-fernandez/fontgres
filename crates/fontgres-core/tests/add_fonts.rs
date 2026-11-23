@@ -1,4 +1,4 @@
-//! Loading a font and reading its ID back (from upstream fontdb).
+//! Loading a font and reading its ID back.
 
 use fontgres_core as fontdb;
 

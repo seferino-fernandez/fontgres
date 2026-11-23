@@ -1,4 +1,4 @@
-//! Loads the system fonts and times a query (from upstream fontdb).
+//! Loads the system fonts and times a query.
 
 use fontgres_core as fontdb;
 
