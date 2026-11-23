@@ -1,4 +1,7 @@
-//! Which files in a directory load as fonts.
+//! Which files in a directory load as fonts. Loading from the file system
+//! needs the `fs` feature.
+
+#![cfg(feature = "fs")]
 
 use std::path::Path;
 
