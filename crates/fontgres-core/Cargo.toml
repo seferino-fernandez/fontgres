@@ -66,22 +66,19 @@ serde_json.workspace = true
 tempfile.workspace = true
 tracing-subscriber.workspace = true
 
-# A copy of [workspace.lints] (Cargo cannot override single workspace lints).
-# Differences: unsafe_code is deny rather than forbid, so the mmap site can
-# carry #[expect(unsafe_code)]; and the lints the imported fontdb code
-# fails are relaxed to allow under "fontdb import" below, to be burned down
-# in a later cleanup.
+# A copy of [workspace.lints] (Cargo cannot override single workspace lints),
+# with two differences: unsafe_code is deny rather than forbid, so the mmap
+# site can carry #[expect(unsafe_code)]; and the public types must implement
+# Copy and Debug where they can.
 [lints.rust]
 missing_docs = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
 unsafe_code = "deny"
 unused_lifetimes = "warn"
-# Kept from the #![warn] attributes in upstream fontdb's lib.rs.
+unused_qualifications = "warn"
 missing_copy_implementations = "warn"
 missing_debug_implementations = "warn"
-# fontdb import: relaxed until the lint cleanup.
-unreachable_pub = "warn"
-unused_qualifications = "warn"
 
 [lints.rustdoc]
 bare_urls = "deny"
@@ -152,6 +149,3 @@ rc_mutex = "warn"
 # a deliberate #[expect(..., reason = "…")] rather than a silent #[allow]
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
-
-# fontdb import: pedantic lints the imported code fails, relaxed until the
-# lint cleanup.
