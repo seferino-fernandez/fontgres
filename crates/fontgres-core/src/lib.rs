@@ -636,10 +636,12 @@ impl Database {
                 None => true,
             };
 
-            if read_global {
-                let _ = fontconfig.merge_config(Path::new("/etc/fonts/local.conf"));
+            for dir in SYSTEM_FONTCONFIG_DIRS {
+                if read_global {
+                    let _ = fontconfig.merge_config(&Path::new(dir).join("local.conf"));
+                }
+                let _ = fontconfig.merge_config(&Path::new(dir).join("fonts.conf"));
             }
-            let _ = fontconfig.merge_config(Path::new("/etc/fonts/fonts.conf"));
         }
 
         if fontconfig.dirs.is_empty() {
@@ -1058,6 +1060,29 @@ impl core::fmt::Debug for Source {
         }
     }
 }
+
+/// The directories holding the system-wide fontconfig configuration,
+/// `fonts.conf` and `local.conf`. On FreeBSD and DragonFly, fontconfig
+/// installed from ports reads its configuration from `/usr/local/etc/fonts`.
+#[cfg(all(
+    feature = "fontconfig",
+    any(target_os = "freebsd", target_os = "dragonfly")
+))]
+const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts", "/usr/local/etc/fonts"];
+/// The directory holding the system-wide fontconfig configuration,
+/// `fonts.conf` and `local.conf`.
+#[cfg(all(
+    unix,
+    feature = "fontconfig",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "dragonfly"
+    ))
+))]
+const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts"];
 
 /// Whether `path` ends in a font extension, `ttf`, `ttc`, `otf` or `otc`, in
 /// any case.
