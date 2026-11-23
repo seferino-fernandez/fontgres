@@ -12,7 +12,7 @@ pub mod os2;
 mod parser;
 
 pub use language::Language;
-pub use name::{name_id, PlatformId};
+pub use name::{PlatformId, name_id};
 pub use os2::{Style, Width};
 pub use parser::LazyArray16;
 

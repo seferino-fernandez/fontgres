@@ -1,13 +1,11 @@
 //! A [Naming Table](
 //! https://docs.microsoft.com/en-us/typography/opentype/spec/name) implementation.
 
-use super::parser::{FromData, LazyArray16, Offset, Offset16, Stream};
 use super::Language;
+use super::parser::{FromData, LazyArray16, Offset, Offset16, Stream};
 
 /// A list of [name ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids)'s.
 pub mod name_id {
-    #![allow(missing_docs)]
-
     pub const FAMILY: u16 = 1;
     pub const POST_SCRIPT_NAME: u16 = 6;
     pub const TYPOGRAPHIC_FAMILY: u16 = 16;
