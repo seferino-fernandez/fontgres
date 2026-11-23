@@ -157,4 +157,3 @@ allow_attributes_without_reason = "warn"
 
 # fontdb import: pedantic lints the imported code fails, relaxed until the
 # lint cleanup.
-needless_pass_by_value = "allow"

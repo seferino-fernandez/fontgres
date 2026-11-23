@@ -246,7 +246,7 @@ impl Database {
     /// adds nothing. Use [`load_font_source`](Database::load_font_source) to
     /// learn which faces were added.
     pub fn load_font_data(&mut self, data: Vec<u8>) {
-        self.load_font_source(Source::Binary(alloc::sync::Arc::new(data)));
+        self.load_font_source(&Source::Binary(alloc::sync::Arc::new(data)));
     }
 
     /// Loads every face in the font at `source` and returns the IDs of the
@@ -264,14 +264,14 @@ impl Database {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// let ids = db.load_font_source(Source::Binary(Arc::new(std::fs::read(path)?)));
+    /// let ids = db.load_font_source(&Source::Binary(Arc::new(std::fs::read(path)?)));
     /// assert_eq!(ids.len(), 1);
     /// assert_eq!(db.face(ids[0]).map(|face| face.index), Some(0));
     ///
-    /// assert!(db.load_font_source(Source::Binary(Arc::new(b"not a font".to_vec()))).is_empty());
+    /// assert!(db.load_font_source(&Source::Binary(Arc::new(b"not a font".to_vec()))).is_empty());
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn load_font_source(&mut self, source: Source) -> TinyVec<[ID; 8]> {
+    pub fn load_font_source(&mut self, source: &Source) -> TinyVec<[ID; 8]> {
         let ids = source.with_data(|data| {
             let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
             let mut ids = TinyVec::with_capacity(n as usize);
@@ -358,7 +358,7 @@ impl Database {
     fn canonicalize(
         &self,
         path: std::path::PathBuf,
-        entry: std::fs::DirEntry,
+        entry: &std::fs::DirEntry,
         seen: &mut std::collections::HashSet<std::path::PathBuf>,
     ) -> Option<(std::path::PathBuf, std::fs::FileType)> {
         let file_type = entry.file_type().ok()?;
@@ -416,7 +416,7 @@ impl Database {
             // font extension: content-addressed stores link font names to
             // files named by hash.
             let link_is_font = has_font_extension(&entry.path());
-            let Some((path, file_type)) = self.canonicalize(entry.path(), entry, seen) else {
+            let Some((path, file_type)) = self.canonicalize(entry.path(), &entry, seen) else {
                 continue;
             };
 

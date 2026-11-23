@@ -9,7 +9,7 @@ use std::sync::Arc;
 fn add_fonts_and_get_ids_back() {
     tracing_subscriber::fmt::init();
     let mut font_db = fontdb::Database::new();
-    let ids = font_db.load_font_source(fontdb::Source::Binary(Arc::new(DEMO_TTF)));
+    let ids = font_db.load_font_source(&fontdb::Source::Binary(Arc::new(DEMO_TTF)));
 
     assert_eq!(ids.len(), 1);
     let id = ids[0];
