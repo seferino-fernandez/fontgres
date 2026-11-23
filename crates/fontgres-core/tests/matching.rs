@@ -98,6 +98,23 @@ fn a_weight_above_500_takes_the_nearest_heavier_then_the_nearest_lighter() {
 }
 
 #[test]
+fn the_preferred_side_wins_over_a_nearer_value_on_the_other_side() {
+    assert_eq!(pick_weight(&[200, 350], 300), Some(200));
+    assert_eq!(pick_weight(&[650, 800], 700), Some(800));
+    let stretches = [Stretch::UltraCondensed, Stretch::SemiCondensed];
+    assert_eq!(
+        pick_stretch(&stretches, Stretch::Condensed),
+        Some(Stretch::UltraCondensed)
+    );
+}
+
+#[test]
+fn a_weight_from_450_to_500_without_400_takes_the_nearest_lighter() {
+    assert_eq!(pick_weight(&[300, 600], 480), Some(300));
+    assert_eq!(pick_weight(&[300, 600], 420), Some(300));
+}
+
+#[test]
 fn italic_falls_back_to_oblique_then_normal() {
     assert_eq!(
         pick_style(&[Style::Normal, Style::Oblique], Style::Italic),
