@@ -1,0 +1,127 @@
+name: Release Binaries
+
+# Starts when release-plz.yml publishes a GitHub Release. Builds the fontgres
+# and fontgres-mcp binaries, attaches one archive and one .sha256 file per
+# binary and target to the Release, then updates the Homebrew formulas in
+# seferino-fernandez/homebrew-tools. Process and secrets: docs/releasing.md.
+# Every action is pinned to a commit SHA (ast-grep `actions-pinned-by-sha`).
+on:
+    release:
+        types: [published]
+
+permissions: {}
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    upload-assets:
+        name: Build ${{ matrix.target }}
+        if: github.repository_owner == 'seferino-fernandez'
+        permissions:
+            contents: write
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 45
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - target: x86_64-unknown-linux-gnu
+                      os: ubuntu-latest
+                    - target: aarch64-unknown-linux-gnu
+                      os: ubuntu-24.04-arm
+                    - target: x86_64-apple-darwin
+                      os: macos-latest
+                    - target: aarch64-apple-darwin
+                      os: macos-latest
+                    - target: x86_64-pc-windows-msvc
+                      os: windows-latest
+                    - target: aarch64-pc-windows-msvc
+                      os: windows-latest
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: ${{ github.event.release.tag_name }}
+                  persist-credentials: false
+
+            # The toolchain comes from rust-toolchain.toml, as in validation.
+            - name: Install Rust toolchain
+              shell: bash
+              run: |
+                  rustup toolchain install
+                  rustup target add "${{ matrix.target }}"
+
+            - name: Upload fontgres (CLI)
+              uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+              with:
+                  bin: fontgres
+                  target: ${{ matrix.target }}
+                  include: LICENSE.md,README.md
+                  tar: unix
+                  zip: windows
+                  checksum: sha256
+                  locked: true
+                  token: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Upload fontgres-mcp (MCP server)
+              uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+              with:
+                  bin: fontgres-mcp
+                  target: ${{ matrix.target }}
+                  include: LICENSE.md,README.md
+                  tar: unix
+                  zip: windows
+                  checksum: sha256
+                  locked: true
+                  token: ${{ secrets.GITHUB_TOKEN }}
+
+    homebrew:
+        name: Update Homebrew tap
+        needs: upload-assets
+        if: github.repository_owner == 'seferino-fernandez'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: ${{ github.event.release.tag_name }}
+                  persist-credentials: false
+
+            - name: Download checksums
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ github.event.release.tag_name }}
+              run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir checksums
+
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: seferino-fernandez/homebrew-tools
+                  token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+                  path: tap
+
+            - name: Render formulas
+              env:
+                  TAG: ${{ github.event.release.tag_name }}
+              run: |
+                  version="${TAG#v}"
+                  mkdir -p tap/Formula
+                  for bin in fontgres fontgres-mcp; do
+                      .github/scripts/homebrew-formula.sh "$bin" "$version" checksums > "tap/Formula/$bin.rb"
+                      ruby -c "tap/Formula/$bin.rb"
+                  done
+
+            - name: Push to the tap
+              working-directory: tap
+              env:
+                  TAG: ${{ github.event.release.tag_name }}
+              run: |
+                  git add Formula/fontgres.rb Formula/fontgres-mcp.rb
+                  if git diff --cached --quiet; then
+                      echo "formulas already at $TAG"
+                      exit 0
+                  fi
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git commit -m "feat: update fontgres and fontgres-mcp to $TAG"
+                  git push

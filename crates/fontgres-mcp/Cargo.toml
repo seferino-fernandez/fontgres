@@ -10,6 +10,19 @@ readme = "README.md"
 keywords = ["mcp", "mcp-server", "llm", "font", "fontdb"]
 categories = ["text-processing", "development-tools"]
 
+# cargo-binstall fetches the archives release-binaries.yml attaches to each
+# GitHub Release.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/fontgres-mcp-{ target }.{ archive-format }"
+bin-dir = "fontgres-mcp{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [[bin]]
 name = "fontgres-mcp"
 path = "src/main.rs"

@@ -1,0 +1,118 @@
+name: release-plz
+
+# Runs after Pull Request Validation passes on a push to main, so a commit that
+# fails validation never reaches crates.io; workflow_dispatch runs it by hand.
+# Every action is pinned to a commit SHA (ast-grep `actions-pinned-by-sha`).
+# Process and secrets: docs/releasing.md.
+on:
+    workflow_run:
+        workflows: ["Pull Request Validation"]
+        types: [completed]
+        branches: [main]
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    # Publishes every crate whose version is not on crates.io yet, then creates
+    # the v{version} tag and GitHub Release (release-plz.toml). The Release
+    # starts release-binaries.yml, which needs the PAT: events from
+    # GITHUB_TOKEN start no workflows.
+    release:
+        name: Release
+        if: >-
+            github.repository_owner == 'seferino-fernandez' &&
+            (github.event_name == 'workflow_dispatch' ||
+            (github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_repository.full_name == github.repository))
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            # Lets release-plz use crates.io trusted publishing once the
+            # CARGO_REGISTRY_TOKEN secret is removed.
+            id-token: write
+        # Never cancel a release: it could stop between two crate publishes.
+        concurrency:
+            group: release-plz-release
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: main
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Check main is the validated commit
+              id: validated
+              env:
+                  VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+              run: |
+                  if [[ -n "$VALIDATED_SHA" && "$(git rev-parse HEAD)" != "$VALIDATED_SHA" ]]; then
+                      echo "main moved past $VALIDATED_SHA; the run for the newer commit takes over"
+                      echo "current=false" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "current=true" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Install Rust toolchain
+              if: steps.validated.outputs.current == 'true'
+              run: rustup toolchain install
+
+            - name: Run release-plz release
+              if: steps.validated.outputs.current == 'true'
+              uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+              with:
+                  command: release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+    # Opens or updates the release PR: version bumps and changelog entries for
+    # the changes since the last release. Merging it releases.
+    release-pr:
+        name: Release PR
+        if: >-
+            github.repository_owner == 'seferino-fernandez' &&
+            (github.event_name == 'workflow_dispatch' ||
+            (github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_repository.full_name == github.repository))
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            pull-requests: write
+        concurrency:
+            group: release-plz-pr
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: main
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Check main is the validated commit
+              id: validated
+              env:
+                  VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+              run: |
+                  if [[ -n "$VALIDATED_SHA" && "$(git rev-parse HEAD)" != "$VALIDATED_SHA" ]]; then
+                      echo "main moved past $VALIDATED_SHA; the run for the newer commit takes over"
+                      echo "current=false" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "current=true" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Install Rust toolchain
+              if: steps.validated.outputs.current == 'true'
+              run: rustup toolchain install
+
+            - name: Run release-plz release-pr
+              if: steps.validated.outputs.current == 'true'
+              uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+              with:
+                  command: release-pr
+              env:
+                  # The PAT lets Pull Request Validation run on the release PR.
+                  GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
