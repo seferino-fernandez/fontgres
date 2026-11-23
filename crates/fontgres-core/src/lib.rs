@@ -70,13 +70,17 @@
 //! A face that fails to parse is skipped, and the reason is logged as a
 //! warning through the [`log`](https://docs.rs/log) crate.
 //!
-//! # Safety
+//! # Memory-mapped files
 //!
-//! With the `memmap` feature, font files are memory-mapped while a load or a
-//! [`Database::with_face_data`] call reads them, and the mapping is dropped
-//! before the call returns. A file that another process truncates or rewrites
-//! during the call is undefined behavior, and in practice can crash the
-//! process. Build without `memmap` to read files into memory instead.
+//! With the `memmap` feature, which is on by default, a font file is
+//! memory-mapped while a load or a [`Database::with_face_data`] call reads it,
+//! and the mapping is dropped before the call returns. If the file is truncated
+//! or rewritten in place during that call, the behavior is undefined, and in
+//! practice the process can crash. That holds whoever changes the file: another
+//! process, another thread, a `log` backend, or the closure passed to
+//! [`Database::with_face_data`]. The crate does not prevent it, so these safe
+//! functions are unsound when a file changes under them. Build without
+//! `memmap` to read files into memory instead.
 //!
 //! [ttf-parser]: https://github.com/harfbuzz/ttf-parser
 
@@ -343,11 +347,18 @@ impl Database {
         let file = std::fs::File::open(path)?;
         #[expect(
             unsafe_code,
-            reason = "memory-mapping the font file, as upstream fontdb does"
+            reason = "mapping reads only the pages parsing touches; nothing enforces that the file stays unchanged, as the crate docs disclose"
         )]
-        // SAFETY: the mapping lives only for this call and the file is not kept
-        // open afterwards; a concurrent change to the file during this call is
-        // the inherent risk of mmap that upstream fontdb accepts.
+        // SAFETY:
+        // Operation: `MmapOptions::map(&file)`.
+        // Contract (memmap2 0.9, `Mmap` docs): using the map is undefined
+        // behavior if the underlying file is modified, in or out of process,
+        // while the map is in use.
+        // Not discharged: nothing here stops another process, another thread,
+        // or a `log` backend called while the faces parse from truncating or
+        // rewriting the file while `mmap` is alive. The crate docs disclose
+        // this under "Memory-mapped files". `mmap` drops when this function
+        // returns, which ends the exposure.
         let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
         // Parsing a face reads a few KiB of tables (`name`, `OS/2`, `post`)
         // spread over the file. With the default sequential readahead each page
@@ -1114,11 +1125,20 @@ impl Source {
                 let file = std::fs::File::open(path).ok()?;
                 #[expect(
                     unsafe_code,
-                    reason = "memory-mapping the font file, as upstream fontdb does"
+                    reason = "mapping reads only the pages the closure touches; nothing enforces that the file stays unchanged, as the crate docs disclose"
                 )]
-                // SAFETY: the mapping lives only for this closure call and the file
-                // is not kept open afterwards; a concurrent change to the file during
-                // the call is the inherent risk of mmap that upstream fontdb accepts.
+                // SAFETY:
+                // Operation: `MmapOptions::map(&file)`.
+                // Contract (memmap2 0.9, `Mmap` docs): using the map is undefined
+                // behavior if the underlying file is modified, in or out of
+                // process, while the map is in use.
+                // Not discharged: nothing here stops another process, another
+                // thread, a `log` backend, or the caller's closure `p` from
+                // truncating or rewriting the file while `mmap` is alive. The
+                // crate docs disclose this under "Memory-mapped files". The bound
+                // `P: FnOnce(&[u8]) -> T` keeps `p` from holding on to the
+                // borrowed bytes, so `mmap` drops when this arm returns, which
+                // ends the exposure.
                 let mmap = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
                 // Random access, as in `Database::load_font_file`.
                 #[cfg(unix)]
