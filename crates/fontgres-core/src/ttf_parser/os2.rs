@@ -9,7 +9,7 @@ const SELECTION_OFFSET: usize = 62;
 
 /// A face [weight](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#usweightclass).
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]
-pub enum Weight {
+pub(crate) enum Weight {
     Thin,
     ExtraLight,
     Light,
@@ -25,7 +25,7 @@ pub enum Weight {
 impl Weight {
     /// Returns a numeric representation of a weight.
     #[inline]
-    pub fn to_number(self) -> u16 {
+    pub(crate) fn to_number(self) -> u16 {
         match self {
             Weight::Thin => 100,
             Weight::ExtraLight => 200,
@@ -122,7 +122,7 @@ impl Default for Width {
 
 /// A face style.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum Style {
+pub(crate) enum Style {
     /// A face that is neither italic not obliqued.
     Normal,
     /// A form that is generally cursive in nature.
@@ -150,7 +150,7 @@ impl SelectionFlags {
 
 /// A [OS/2 and Windows Metrics Table](https://docs.microsoft.com/en-us/typography/opentype/spec/os2).
 #[derive(Clone, Copy)]
-pub struct Table<'a> {
+pub(crate) struct Table<'a> {
     /// Table version.
     pub version: u8,
     data: &'a [u8],
@@ -158,7 +158,7 @@ pub struct Table<'a> {
 
 impl<'a> Table<'a> {
     /// Parses a table from raw data.
-    pub fn parse(data: &'a [u8]) -> Option<Self> {
+    pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
         let mut s = Stream::new(data);
         let version = s.read::<u16>()?;
 
@@ -186,13 +186,13 @@ impl<'a> Table<'a> {
 
     /// Returns weight class.
     #[inline]
-    pub fn weight(&self) -> Weight {
+    pub(crate) fn weight(&self) -> Weight {
         Weight::from(Stream::read_at::<u16>(self.data, WEIGHT_CLASS_OFFSET).unwrap_or(0))
     }
 
     /// Returns face width.
     #[inline]
-    pub fn width(&self) -> Width {
+    pub(crate) fn width(&self) -> Width {
         match Stream::read_at::<u16>(self.data, WIDTH_CLASS_OFFSET).unwrap_or(0) {
             1 => Width::UltraCondensed,
             2 => Width::ExtraCondensed,
@@ -213,7 +213,7 @@ impl<'a> Table<'a> {
     }
 
     /// Returns style.
-    pub fn style(&self) -> Style {
+    pub(crate) fn style(&self) -> Style {
         let flags = SelectionFlags(self.fs_selection());
         if flags.italic() {
             Style::Italic

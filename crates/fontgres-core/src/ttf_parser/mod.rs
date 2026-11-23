@@ -7,14 +7,15 @@ the `name` table and parts of the `OS/2` table.
 */
 
 mod language;
-pub mod name;
-pub mod os2;
+pub(crate) mod name;
+pub(crate) mod os2;
 mod parser;
 
 pub use language::Language;
-pub use name::{PlatformId, name_id};
-pub use os2::{Style, Width};
-pub use parser::LazyArray16;
+pub(crate) use name::{PlatformId, name_id};
+pub(crate) use os2::Style;
+pub use os2::Width;
+pub(crate) use parser::LazyArray16;
 
 use parser::{FromData, NumFrom, Offset, Offset32, Stream};
 
@@ -45,12 +46,12 @@ impl FromData for Magic {
 /// A 4-byte tag.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Tag(pub u32);
+pub(crate) struct Tag(pub u32);
 
 impl Tag {
     /// Creates a `Tag` from bytes.
     #[inline]
-    pub const fn from_bytes(bytes: &[u8; 4]) -> Self {
+    pub(crate) const fn from_bytes(bytes: &[u8; 4]) -> Self {
         Tag(((bytes[0] as u32) << 24)
             | ((bytes[1] as u32) << 16)
             | ((bytes[2] as u32) << 8)
@@ -93,7 +94,7 @@ impl FromData for TableRecord {
 
 /// A list of font face parsing errors.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FaceParsingError {
+pub(crate) enum FaceParsingError {
     /// An attempt to read out of bounds detected.
     ///
     /// Should occur only on malformed fonts.
@@ -111,7 +112,7 @@ pub enum FaceParsingError {
 /// Unlike a full font face, `RawFace` parses only face table records.
 /// Meaning all you can get from this type is a raw (`&[u8]`) data of a requested table.
 #[derive(Clone, Copy)]
-pub struct RawFace<'a> {
+pub(crate) struct RawFace<'a> {
     /// The input font file data.
     pub data: &'a [u8],
     /// An array of table records.
@@ -124,7 +125,7 @@ impl<'a> RawFace<'a> {
     /// `index` indicates the specific font face in a font collection.
     /// Use [`fonts_in_collection`] to get the total number of font faces.
     /// Set to 0 if unsure.
-    pub fn parse(data: &'a [u8], index: u32) -> Result<Self, FaceParsingError> {
+    pub(crate) fn parse(data: &'a [u8], index: u32) -> Result<Self, FaceParsingError> {
         // https://docs.microsoft.com/en-us/typography/opentype/spec/otff#organization-of-an-opentype-font
 
         let mut s = Stream::new(data);
@@ -184,7 +185,7 @@ impl<'a> RawFace<'a> {
     }
 
     /// Returns the raw data of a selected table.
-    pub fn table(&self, tag: Tag) -> Option<&'a [u8]> {
+    pub(crate) fn table(&self, tag: Tag) -> Option<&'a [u8]> {
         let (_, table) = self
             .table_records
             .binary_search_by(|record| record.tag.cmp(&tag))?;
@@ -205,7 +206,7 @@ impl core::fmt::Debug for RawFace<'_> {
 ///
 /// Returns `None` if a provided data is not a TrueType font collection.
 #[inline]
-pub fn fonts_in_collection(data: &[u8]) -> Option<u32> {
+pub(crate) fn fonts_in_collection(data: &[u8]) -> Option<u32> {
     let mut s = Stream::new(data);
     if s.read::<Magic>()? != Magic::FontCollection {
         return None;

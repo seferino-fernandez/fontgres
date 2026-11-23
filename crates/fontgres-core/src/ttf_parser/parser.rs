@@ -5,7 +5,7 @@ use core::convert::TryInto;
 /// A trait for parsing raw binary data of fixed size.
 ///
 /// This is a low-level, internal trait that should not be used directly.
-pub trait FromData: Sized {
+pub(crate) trait FromData: Sized {
     /// Object's raw data size.
     ///
     /// Not always the same as `mem::size_of`.
@@ -38,7 +38,7 @@ impl FromData for u32 {
 /// Rust doesn't implement `From<u32> for usize`,
 /// because it has to support 16 bit targets.
 /// We don't, so we can allow this.
-pub trait NumFrom<T>: Sized {
+pub(super) trait NumFrom<T>: Sized {
     /// Converts u32 into usize.
     fn num_from(_: T) -> Self;
 }
@@ -59,7 +59,7 @@ impl NumFrom<u32> for usize {
 ///
 /// Array values are stored in a continuous data chunk.
 #[derive(Clone, Copy)]
-pub struct LazyArray16<'a, T> {
+pub(crate) struct LazyArray16<'a, T> {
     data: &'a [u8],
     data_type: core::marker::PhantomData<T>,
 }
@@ -77,7 +77,7 @@ impl<T> Default for LazyArray16<'_, T> {
 impl<'a, T: FromData> LazyArray16<'a, T> {
     /// Creates a new `LazyArray`.
     #[inline]
-    pub fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         LazyArray16 {
             data,
             data_type: core::marker::PhantomData,
@@ -86,7 +86,7 @@ impl<'a, T: FromData> LazyArray16<'a, T> {
 
     /// Returns a value at `index`.
     #[inline]
-    pub fn get(&self, index: u16) -> Option<T> {
+    pub(crate) fn get(&self, index: u16) -> Option<T> {
         if index < self.len() {
             let start = usize::from(index) * T::SIZE;
             let end = start + T::SIZE;
@@ -98,13 +98,13 @@ impl<'a, T: FromData> LazyArray16<'a, T> {
 
     /// Returns array's length.
     #[inline]
-    pub fn len(&self) -> u16 {
+    pub(crate) fn len(&self) -> u16 {
         (self.data.len() / T::SIZE) as u16
     }
 
     /// Performs a binary search using specified closure.
     #[inline]
-    pub fn binary_search_by<F>(&self, mut f: F) -> Option<(u16, T)>
+    pub(crate) fn binary_search_by<F>(&self, mut f: F) -> Option<(u16, T)>
     where
         F: FnMut(&T) -> core::cmp::Ordering,
     {
@@ -154,7 +154,7 @@ impl<'a, T: FromData> IntoIterator for LazyArray16<'a, T> {
 
 /// An iterator over `LazyArray16`.
 #[derive(Clone, Copy)]
-pub struct LazyArrayIter16<'a, T> {
+pub(crate) struct LazyArrayIter16<'a, T> {
     data: LazyArray16<'a, T>,
     index: u16,
 }
@@ -176,7 +176,7 @@ impl<'a, T: FromData> Iterator for LazyArrayIter16<'a, T> {
 
 /// A streaming binary parser.
 #[derive(Clone, Default, Debug)]
-pub struct Stream<'a> {
+pub(super) struct Stream<'a> {
     data: &'a [u8],
     offset: usize,
 }
@@ -184,13 +184,13 @@ pub struct Stream<'a> {
 impl<'a> Stream<'a> {
     /// Creates a new `Stream` parser.
     #[inline]
-    pub fn new(data: &'a [u8]) -> Self {
+    pub(super) fn new(data: &'a [u8]) -> Self {
         Stream { data, offset: 0 }
     }
 
     /// Returns the current offset.
     #[inline]
-    pub fn offset(&self) -> usize {
+    pub(super) fn offset(&self) -> usize {
         self.offset
     }
 
@@ -198,7 +198,7 @@ impl<'a> Stream<'a> {
     ///
     /// Returns `None` when `Stream` is reached the end.
     #[inline]
-    pub fn tail(&self) -> Option<&'a [u8]> {
+    pub(super) fn tail(&self) -> Option<&'a [u8]> {
         self.data.get(self.offset..)
     }
 
@@ -206,7 +206,7 @@ impl<'a> Stream<'a> {
     ///
     /// Doesn't check bounds.
     #[inline]
-    pub fn skip<T: FromData>(&mut self) {
+    pub(super) fn skip<T: FromData>(&mut self) {
         self.advance(T::SIZE);
     }
 
@@ -214,13 +214,13 @@ impl<'a> Stream<'a> {
     ///
     /// Doesn't check bounds.
     #[inline]
-    pub fn advance(&mut self, len: usize) {
+    pub(super) fn advance(&mut self, len: usize) {
         self.offset += len;
     }
 
     /// Advances by the specified `len` and checks for bounds.
     #[inline]
-    pub fn advance_checked(&mut self, len: usize) -> Option<()> {
+    pub(super) fn advance_checked(&mut self, len: usize) -> Option<()> {
         if self.offset + len <= self.data.len() {
             self.advance(len);
             Some(())
@@ -234,19 +234,19 @@ impl<'a> Stream<'a> {
     /// Returns `None` when there is not enough data left in the stream
     /// or the type parsing failed.
     #[inline]
-    pub fn read<T: FromData>(&mut self) -> Option<T> {
+    pub(super) fn read<T: FromData>(&mut self) -> Option<T> {
         self.read_bytes(T::SIZE).and_then(T::parse)
     }
 
     /// Parses the type from the steam at offset.
     #[inline]
-    pub fn read_at<T: FromData>(data: &[u8], offset: usize) -> Option<T> {
+    pub(super) fn read_at<T: FromData>(data: &[u8], offset: usize) -> Option<T> {
         data.get(offset..offset + T::SIZE).and_then(T::parse)
     }
 
     /// Reads N bytes from the stream.
     #[inline]
-    pub fn read_bytes(&mut self, len: usize) -> Option<&'a [u8]> {
+    pub(super) fn read_bytes(&mut self, len: usize) -> Option<&'a [u8]> {
         // An integer overflow here on 32bit systems is almost guarantee to be caused
         // by an incorrect parsing logic from the caller side.
         // Simply using `checked_add` here would silently swallow errors, which is not what we want.
@@ -259,21 +259,21 @@ impl<'a> Stream<'a> {
 
     /// Reads the next `count` types as a slice.
     #[inline]
-    pub fn read_array16<T: FromData>(&mut self, count: u16) -> Option<LazyArray16<'a, T>> {
+    pub(super) fn read_array16<T: FromData>(&mut self, count: u16) -> Option<LazyArray16<'a, T>> {
         let len = usize::from(count) * T::SIZE;
         self.read_bytes(len).map(LazyArray16::new)
     }
 }
 
 /// A common offset methods.
-pub trait Offset {
+pub(super) trait Offset {
     /// Converts the offset to `usize`.
     fn to_usize(&self) -> usize;
 }
 
 /// A type-safe u16 offset.
 #[derive(Clone, Copy, Debug)]
-pub struct Offset16(pub u16);
+pub(super) struct Offset16(pub u16);
 
 impl Offset for Offset16 {
     #[inline]
@@ -293,7 +293,7 @@ impl FromData for Offset16 {
 
 /// A type-safe u32 offset.
 #[derive(Clone, Copy, Debug)]
-pub struct Offset32(pub u32);
+pub(super) struct Offset32(pub u32);
 
 impl Offset for Offset32 {
     #[inline]
