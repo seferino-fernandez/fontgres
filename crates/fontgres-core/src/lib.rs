@@ -291,14 +291,16 @@ impl Database {
         ids.unwrap_or_default()
     }
 
-    /// Backend function used by `load_font_file` to load font files.
+    /// Adds the faces [`parse_font_file`] parsed from `path`, and logs the
+    /// ones that failed to parse.
     #[cfg(feature = "fs")]
-    fn load_fonts_from_file(&mut self, path: &std::path::Path, data: &[u8]) {
-        let source = Source::File(path.into());
-
-        let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
-        for index in 0..n {
-            match parse_face_info(source.clone(), data, index) {
+    fn push_parsed_faces(
+        &mut self,
+        path: &std::path::Path,
+        faces: Vec<Result<FaceInfo, LoadError>>,
+    ) {
+        for (index, face) in faces.into_iter().enumerate() {
+            match face {
                 Ok(info) => {
                     self.push_face_info(info);
                 }
@@ -336,7 +338,22 @@ impl Database {
     // A non-generic version.
     #[cfg(feature = "fs")]
     fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        with_file_data(path, |data| self.load_fonts_from_file(path, data))
+        let faces = parse_font_file(path)?;
+        self.push_parsed_faces(path, faces);
+        Ok(())
+    }
+
+    /// Adds the faces of `files` in the order of `files`, as loading them one
+    /// by one would, after parsing them on several threads. A file that cannot
+    /// be read is skipped and logged as a warning.
+    #[cfg(feature = "fs")]
+    fn load_font_files(&mut self, files: &[std::path::PathBuf]) {
+        for (path, parsed) in files.iter().zip(parse_font_files(files)) {
+            match parsed {
+                Ok(faces) => self.push_parsed_faces(path, faces),
+                Err(e) => log::warn!("Failed to load '{}' cause {}.", path.display(), e),
+            }
+        }
     }
 
     /// Loads every font file in `dir` and its subdirectories.
@@ -351,7 +368,9 @@ impl Database {
     /// fails to parse, is skipped and logged as a warning.
     #[cfg(feature = "fs")]
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
-        self.load_fonts_dir_impl(dir.as_ref(), &mut std::collections::HashSet::new());
+        let mut walk = FontDirWalk::default();
+        self.find_font_files(dir.as_ref(), &mut walk);
+        self.load_font_files(&walk.files);
     }
 
     #[cfg(feature = "fs")]
@@ -359,8 +378,9 @@ impl Database {
         &self,
         path: std::path::PathBuf,
         entry: &std::fs::DirEntry,
-        seen: &mut std::collections::HashSet<std::path::PathBuf>,
+        walk: &mut FontDirWalk,
     ) -> Option<(std::path::PathBuf, std::fs::FileType)> {
+        let seen = &mut walk.seen;
         let file_type = entry.file_type().ok()?;
         if !file_type.is_symlink() {
             if !seen.is_empty() {
@@ -401,13 +421,10 @@ impl Database {
         Some((canon, stat.file_type()))
     }
 
-    // A non-generic version.
+    /// Adds the font files in `dir` and its subdirectories to `walk`, in the
+    /// order [`load_fonts_dir`](Database::load_fonts_dir) documents.
     #[cfg(feature = "fs")]
-    fn load_fonts_dir_impl(
-        &mut self,
-        dir: &std::path::Path,
-        seen: &mut std::collections::HashSet<std::path::PathBuf>,
-    ) {
+    fn find_font_files(&self, dir: &std::path::Path, walk: &mut FontDirWalk) {
         let Ok(fonts_dir) = std::fs::read_dir(dir) else {
             return;
         };
@@ -417,16 +434,14 @@ impl Database {
             // font extension: content-addressed stores link font names to
             // files named by hash.
             let link_is_font = has_font_extension(&entry.path());
-            let Some((path, file_type)) = self.canonicalize(entry.path(), &entry, seen) else {
+            let Some((path, file_type)) = self.canonicalize(entry.path(), &entry, walk) else {
                 continue;
             };
 
             if file_type.is_file() && (link_is_font || has_font_extension(&path)) {
-                if let Err(e) = self.load_font_file(&path) {
-                    log::warn!("Failed to load '{}' cause {}.", path.display(), e);
-                }
+                walk.files.push(path);
             } else if file_type.is_dir() {
-                self.load_fonts_dir_impl(&path, seen);
+                self.find_font_files(&path, walk);
             }
         }
     }
@@ -459,32 +474,33 @@ impl Database {
     pub fn load_system_fonts(&mut self) {
         #[cfg(target_os = "windows")]
         {
-            let mut seen = std::collections::HashSet::new();
+            let mut walk = FontDirWalk::default();
             if let Some(ref system_root) = std::env::var_os("SYSTEMROOT") {
                 let system_root_path = std::path::Path::new(system_root);
-                self.load_fonts_dir_impl(&system_root_path.join("Fonts"), &mut seen);
+                self.find_font_files(&system_root_path.join("Fonts"), &mut walk);
             } else {
-                self.load_fonts_dir_impl("C:\\Windows\\Fonts\\".as_ref(), &mut seen);
+                self.find_font_files("C:\\Windows\\Fonts\\".as_ref(), &mut walk);
             }
 
             if let Ok(ref home) = std::env::var("USERPROFILE") {
                 let home_path = std::path::Path::new(home);
-                self.load_fonts_dir_impl(
+                self.find_font_files(
                     &home_path.join("AppData\\Local\\Microsoft\\Windows\\Fonts"),
-                    &mut seen,
+                    &mut walk,
                 );
-                self.load_fonts_dir_impl(
+                self.find_font_files(
                     &home_path.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"),
-                    &mut seen,
+                    &mut walk,
                 );
             }
+            self.load_font_files(&walk.files);
         }
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            let mut seen = std::collections::HashSet::new();
-            self.load_fonts_dir_impl("/Library/Fonts".as_ref(), &mut seen);
-            self.load_fonts_dir_impl("/System/Library/Fonts".as_ref(), &mut seen);
+            let mut walk = FontDirWalk::default();
+            self.find_font_files("/Library/Fonts".as_ref(), &mut walk);
+            self.find_font_files("/System/Library/Fonts".as_ref(), &mut walk);
             // Downloadable fonts, location varies on major macOS releases
             let assets = std::fs::read_dir("/System/Library/AssetsV2")
                 .into_iter()
@@ -497,14 +513,15 @@ impl Database {
                         .starts_with("com_apple_MobileAsset_Font")
                 });
             for entry in assets {
-                self.load_fonts_dir_impl(&entry.path(), &mut seen);
+                self.find_font_files(&entry.path(), &mut walk);
             }
-            self.load_fonts_dir_impl("/Network/Library/Fonts".as_ref(), &mut seen);
+            self.find_font_files("/Network/Library/Fonts".as_ref(), &mut walk);
 
             if let Ok(ref home) = std::env::var("HOME") {
                 let home_path = std::path::Path::new(home);
-                self.load_fonts_dir_impl(&home_path.join("Library/Fonts"), &mut seen);
+                self.find_font_files(&home_path.join("Library/Fonts"), &mut walk);
             }
+            self.load_font_files(&walk.files);
         }
 
         // Linux.
@@ -532,15 +549,16 @@ impl Database {
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
     fn load_no_fontconfig(&mut self) {
-        let mut seen = std::collections::HashSet::new();
-        self.load_fonts_dir_impl("/usr/share/fonts/".as_ref(), &mut seen);
-        self.load_fonts_dir_impl("/usr/local/share/fonts/".as_ref(), &mut seen);
+        let mut walk = FontDirWalk::default();
+        self.find_font_files("/usr/share/fonts/".as_ref(), &mut walk);
+        self.find_font_files("/usr/local/share/fonts/".as_ref(), &mut walk);
 
         if let Ok(ref home) = std::env::var("HOME") {
             let home_path = std::path::Path::new(home);
-            self.load_fonts_dir_impl(&home_path.join(".fonts"), &mut seen);
-            self.load_fonts_dir_impl(&home_path.join(".local/share/fonts"), &mut seen);
+            self.find_font_files(&home_path.join(".fonts"), &mut walk);
+            self.find_font_files(&home_path.join(".local/share/fonts"), &mut walk);
         }
+        self.load_font_files(&walk.files);
     }
 
     // Linux.
@@ -585,14 +603,15 @@ impl Database {
             log::warn!("Fallback to loading from known font dir paths.");
             self.load_no_fontconfig();
         } else {
-            let mut seen = std::collections::HashSet::new();
+            let mut walk = FontDirWalk::default();
             let home = home.as_ref().ok().map(Path::new);
             let dirs = core::mem::take(&mut fontconfig.dirs)
                 .into_iter()
                 .filter_map(|dir| expand_home(dir.path, home));
             for path in dirs {
-                self.load_fonts_dir_impl(&path, &mut seen);
+                self.find_font_files(&path, &mut walk);
             }
+            self.load_font_files(&walk.files);
         }
 
         // Generic families resolve after loading, so each can skip the
@@ -1061,6 +1080,91 @@ fn has_font_extension(path: &std::path::Path) -> bool {
                 .iter()
                 .any(|font| extension.eq_ignore_ascii_case(font))
         })
+}
+
+/// A walk over font directories: the paths visited, to load each file once
+/// however many links lead to it, and the font files found, in walk order.
+#[cfg(feature = "fs")]
+#[derive(Default)]
+struct FontDirWalk {
+    seen: std::collections::HashSet<std::path::PathBuf>,
+    files: Vec<std::path::PathBuf>,
+}
+
+/// Every face of a font file, or the error that kept the file from being read.
+#[cfg(feature = "fs")]
+type ParsedFontFile = Result<Vec<Result<FaceInfo, LoadError>>, std::io::Error>;
+
+/// Parses every face of the font file at `path`, in index order.
+#[cfg(feature = "fs")]
+fn parse_font_file(path: &std::path::Path) -> ParsedFontFile {
+    with_file_data(path, |data| {
+        let source = Source::File(path.into());
+        let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
+        (0..n)
+            .map(|index| parse_face_info(source.clone(), data, index))
+            .collect()
+    })
+}
+
+/// The most threads [`parse_font_files`] uses. Opening and mapping files
+/// contend in the kernel: on a 16-core Mac, more than six threads made loading
+/// slower while multiplying the CPU time spent.
+#[cfg(feature = "fs")]
+const MAX_LOAD_THREADS: usize = 4;
+
+/// The fewest files [`parse_font_files`] gives each thread, so that a few
+/// files are not worth a thread's start.
+#[cfg(feature = "fs")]
+const MIN_FILES_PER_LOAD_THREAD: usize = 16;
+
+/// Parses `files` with [`parse_font_file`] on up to [`MAX_LOAD_THREADS`]
+/// threads and returns the results in the order of `files`.
+///
+/// Opening and mapping a file costs more than parsing it, and the threads
+/// overlap that wait.
+#[cfg(feature = "fs")]
+fn parse_font_files(files: &[std::path::PathBuf]) -> Vec<ParsedFontFile> {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    let threads = std::thread::available_parallelism()
+        .map_or(1, core::num::NonZero::get)
+        .min(MAX_LOAD_THREADS)
+        .min(files.len().div_ceil(MIN_FILES_PER_LOAD_THREAD));
+    let next = AtomicUsize::new(0);
+    // Each thread takes the next unparsed file until none is left.
+    let work = || {
+        let mut parsed = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some(path) = files.get(index) else {
+                break parsed;
+            };
+            parsed.push((index, parse_font_file(path)));
+        }
+    };
+    let mut parsed = std::thread::scope(|scope| {
+        // A thread that fails to spawn leaves its share to the others; this
+        // thread works too.
+        let workers: Vec<_> = (1..threads)
+            .filter_map(|_| {
+                std::thread::Builder::new()
+                    .name("fontgres-load".into())
+                    .spawn_scoped(scope, work)
+                    .ok()
+            })
+            .collect();
+        let mut parsed = work();
+        for worker in workers {
+            match worker.join() {
+                Ok(more) => parsed.extend(more),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        parsed
+    });
+    parsed.sort_unstable_by_key(|&(index, _)| index);
+    parsed.into_iter().map(|(_, file)| file).collect()
 }
 
 /// Calls `f` with the contents of the file at `path` and returns what `f`

@@ -32,6 +32,36 @@ fn other_extensions_do_not_load() {
     assert_eq!(faces_in(dir.path()), 0);
 }
 
+/// A directory large enough to parse on several threads keeps the order a
+/// one-by-one load gives: the directory's order, with a file that is not a
+/// font skipped.
+#[test]
+fn a_large_directory_loads_in_directory_order() {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..64 {
+        std::fs::copy(TUFFY, dir.path().join(format!("Tuffy{index:02}.ttf"))).unwrap();
+    }
+    std::fs::write(dir.path().join("Broken.ttf"), "not a font").unwrap();
+    let expected: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| !path.ends_with("Broken.ttf"))
+        .collect();
+
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+    let loaded: Vec<_> = database
+        .faces()
+        .map(|face| {
+            let fontgres_core::Source::File(path) = &face.source else {
+                panic!("{:?} is not a file source", face.source);
+            };
+            path.clone()
+        })
+        .collect();
+    assert_eq!(loaded, expected);
+}
+
 #[cfg(unix)]
 mod symlinks {
     use super::{TUFFY, faces_in};
