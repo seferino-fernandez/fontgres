@@ -485,6 +485,7 @@ dependencies = [
  "memmap2",
  "schemars",
  "serde",
+ "serde_json",
  "slotmap",
  "tempfile",
  "thiserror",

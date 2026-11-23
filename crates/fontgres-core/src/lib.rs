@@ -1356,9 +1356,12 @@ pub mod config;
 /// Environment-variable source abstraction (testable).
 #[cfg(feature = "cli")]
 pub mod env;
-/// Error types for configuration loading.
+/// Error types for configuration and font loading.
 #[cfg(feature = "cli")]
 pub mod error;
+/// Serializable font views, font loading and querying for the binaries.
+#[cfg(feature = "cli")]
+pub mod models;
 
 #[cfg(feature = "cli")]
 pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig, GenericFamilies};

@@ -1,14 +1,15 @@
-//! Error types for the `fontgres-core` crate's configuration layer.
+//! Error types for the configuration and font loading the workspace binaries
+//! share.
 //!
-//! Every fallible configuration operation returns [`Error`] through the
-//! crate-level [`Result`](crate::Result) alias.
+//! Every fallible operation returns [`Error`] through the crate-level
+//! [`Result`](crate::Result) alias.
 
 use std::fmt;
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errors returned by `fontgres-core`'s configuration loading.
+/// Errors returned by configuration and font loading.
 ///
 /// A variant either shows its inner error in its message or returns it from
 /// [`std::error::Error::source`], never both, so a chain printer such as
@@ -25,6 +26,23 @@ pub enum Error {
     /// Local I/O failure (e.g. reading the configuration file).
     #[error("I/O error")]
     Io(#[from] std::io::Error),
+
+    /// A configured font directory does not exist.
+    #[error("font directory {} does not exist", .path.display())]
+    FontDirNotFound {
+        /// The directory that does not exist.
+        path: PathBuf,
+    },
+
+    /// A configured font file cannot be read.
+    #[error("cannot read font file {}", .path.display())]
+    FontFile {
+        /// The file that cannot be read.
+        path: PathBuf,
+        /// Why it cannot be read.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl From<ConfigError> for Error {
