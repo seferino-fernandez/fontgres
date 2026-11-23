@@ -194,6 +194,20 @@ impl core::fmt::Display for LoadError {
 /// family each CSS generic family ([`Family::Serif`] and the others) resolves
 /// to.
 ///
+/// The file-system loads ([`load_fonts_dir`], [`load_system_fonts`] and
+/// [`load_font_file`]) load each font file once per database: the database
+/// remembers each font file they reach, by canonical path, and skips it on any
+/// later load, even after [`remove_face`] removed its faces. The directory and
+/// system loads remember a file even when it fails to read or parse;
+/// [`load_font_file`] remembers it only once it reads, so a failed call can be
+/// retried. Copies of a font
+/// and hard links to it are different files and each load. A clone remembers
+/// what the original loaded; to load files again, use a new database.
+///
+/// [`load_fonts_dir`]: Database::load_fonts_dir
+/// [`load_system_fonts`]: Database::load_system_fonts
+/// [`load_font_file`]: Database::load_font_file
+/// [`remove_face`]: Database::remove_face
 /// [`push_face_info`]: Database::push_face_info
 /// [`face`]: Database::face
 /// [`faces`]: Database::faces
@@ -206,6 +220,11 @@ pub struct Database {
     family_cursive: String,
     family_fantasy: String,
     family_monospace: String,
+    /// The canonical paths of every font file a directory or system walk
+    /// reached, including those that failed to read or parse, and of every
+    /// file [`Database::load_font_file`] read.
+    #[cfg(feature = "fs")]
+    loaded_files: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl Default for Database {
@@ -236,6 +255,8 @@ impl Database {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             family_fantasy: "Papyrus".to_string(),
             family_monospace: "Courier New".to_string(),
+            #[cfg(feature = "fs")]
+            loaded_files: std::collections::HashSet::new(),
         }
     }
 
@@ -320,7 +341,9 @@ impl Database {
     ///
     /// A collection adds one face per font it contains. A face that fails to
     /// parse is skipped and logged as a warning, so a readable file that is not
-    /// a font returns `Ok` and adds nothing.
+    /// a font returns `Ok` and adds nothing. A file this database already
+    /// loaded, by this or any other file-system load, returns `Ok` and adds
+    /// nothing.
     ///
     /// # Errors
     ///
@@ -338,17 +361,31 @@ impl Database {
     // A non-generic version.
     #[cfg(feature = "fs")]
     fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if self.loaded_files.contains(&canonical) {
+            return Ok(());
+        }
         let faces = parse_font_file(path)?;
+        self.loaded_files.insert(canonical);
         self.push_parsed_faces(path, faces);
         Ok(())
     }
 
     /// Adds the faces of `files` in the order of `files`, as loading them one
-    /// by one would, after parsing them on several threads. A file that cannot
-    /// be read is skipped and logged as a warning.
+    /// by one would, after parsing them on several threads. A file this
+    /// database already loaded is skipped. A file that cannot be read is
+    /// skipped and logged as a warning.
     #[cfg(feature = "fs")]
-    fn load_font_files(&mut self, files: &[std::path::PathBuf]) {
-        for (path, parsed) in files.iter().zip(parse_font_files(files)) {
+    fn load_font_files(&mut self, files: Vec<FontFile>) {
+        let files: Vec<_> = files
+            .into_iter()
+            .filter_map(|file| {
+                self.loaded_files
+                    .insert(file.canonical)
+                    .then_some(file.path)
+            })
+            .collect();
+        for (path, parsed) in files.iter().zip(parse_font_files(&files)) {
             match parsed {
                 Ok(faces) => self.push_parsed_faces(path, faces),
                 Err(e) => log::warn!("Failed to load '{}' cause {}.", path.display(), e),
@@ -361,8 +398,9 @@ impl Database {
     /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension, in any case,
     /// load. Symbolic links are followed, and a link loads when either its own
     /// name or its target's has such an extension. A file loads once however
-    /// many links lead to it within `dir`; a file an earlier call loaded
-    /// loads again.
+    /// many links lead to it, and a file this database already loaded, by this
+    /// or any other file-system load, is skipped. Loading a directory again
+    /// adds only the files added to it since.
     ///
     /// Nothing here is an error. A directory that does not exist or cannot be
     /// read adds nothing, silently. A file that cannot be read, and a face that
@@ -371,7 +409,7 @@ impl Database {
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
         let mut walk = FontDirWalk::default();
         walk.find_font_files(dir.as_ref());
-        self.load_font_files(&walk.files);
+        self.load_font_files(walk.files);
     }
 
     /// Loads the fonts installed on the system by scanning its font directories.
@@ -417,7 +455,7 @@ impl Database {
                     &home_path.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"),
                 );
             }
-            self.load_font_files(&walk.files);
+            self.load_font_files(walk.files);
         }
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -445,7 +483,7 @@ impl Database {
                 let home_path = std::path::Path::new(home);
                 walk.find_font_files(&home_path.join("Library/Fonts"));
             }
-            self.load_font_files(&walk.files);
+            self.load_font_files(walk.files);
         }
 
         // Linux.
@@ -482,7 +520,7 @@ impl Database {
             walk.find_font_files(&home_path.join(".fonts"));
             walk.find_font_files(&home_path.join(".local/share/fonts"));
         }
-        self.load_font_files(&walk.files);
+        self.load_font_files(walk.files);
     }
 
     // Linux.
@@ -535,7 +573,7 @@ impl Database {
             for path in dirs {
                 walk.find_font_files(&path);
             }
-            self.load_font_files(&walk.files);
+            self.load_font_files(walk.files);
         }
 
         // Generic families resolve after loading, so each can skip the
@@ -606,6 +644,10 @@ impl Database {
     ///
     /// Use it to drop unwanted faces after loading a directory, or a single
     /// face of a collection. An `id` that matches no face is ignored.
+    ///
+    /// The database still remembers the face's file as loaded, so loading the
+    /// file or its directory again does not bring the face back. To load it
+    /// again, use a new database.
     pub fn remove_face(&mut self, id: ID) {
         self.faces.remove(id.0);
     }
@@ -1006,21 +1048,30 @@ fn has_font_extension(path: &std::path::Path) -> bool {
         })
 }
 
-/// A walk over font directories: the canonical paths of the files and
-/// directories reached, to load each once however many paths lead to it, and
-/// the font files found, in walk order.
+/// A font file a walk found: the path to load and report it by, and the
+/// canonical path that identifies it however many paths lead to it.
+#[cfg(feature = "fs")]
+struct FontFile {
+    path: std::path::PathBuf,
+    canonical: std::path::PathBuf,
+}
+
+/// A walk over font directories: the canonical paths of the directories
+/// reached, to walk each once however many paths lead to it, and the font
+/// files found, in walk order. A file reached by several paths is listed once
+/// per path; loading skips all but the first.
 #[cfg(feature = "fs")]
 #[derive(Default)]
 struct FontDirWalk {
-    seen: std::collections::HashSet<std::path::PathBuf>,
-    files: Vec<std::path::PathBuf>,
+    dirs: std::collections::HashSet<std::path::PathBuf>,
+    files: Vec<FontFile>,
 }
 
 #[cfg(feature = "fs")]
 impl FontDirWalk {
     /// Adds the font files in `dir` and its subdirectories, in the order
     /// [`load_fonts_dir`](Database::load_fonts_dir) documents, skipping each
-    /// file and directory the walk already reached by another path.
+    /// directory the walk already reached by another path.
     fn find_font_files(&mut self, dir: &std::path::Path) {
         // Canonicalizing the root once and joining each entry's name to it
         // gives every entry that is not a link its canonical path, so the walk
@@ -1028,7 +1079,7 @@ impl FontDirWalk {
         // root that can be read but not canonicalized is still walked, under
         // the path it was given.
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        if self.seen.insert(canonical.clone()) {
+        if self.dirs.insert(canonical.clone()) {
             self.walk_dir(dir, &canonical);
         }
     }
@@ -1048,14 +1099,14 @@ impl FontDirWalk {
                 self.follow_link(&path);
             } else if file_type.is_dir() {
                 let key = canonical.join(entry.file_name());
-                if self.seen.insert(key.clone()) {
+                if self.dirs.insert(key.clone()) {
                     self.walk_dir(&path, &key);
                 }
-            } else if file_type.is_file()
-                && has_font_extension(&path)
-                && self.seen.insert(canonical.join(entry.file_name()))
-            {
-                self.files.push(path);
+            } else if file_type.is_file() && has_font_extension(&path) {
+                self.files.push(FontFile {
+                    canonical: canonical.join(entry.file_name()),
+                    path,
+                });
             }
         }
     }
@@ -1078,13 +1129,15 @@ impl FontDirWalk {
         if stat.is_file() && !has_font_extension(link) && !has_font_extension(&target) {
             return;
         }
-        if !self.seen.insert(target.clone()) {
-            return;
-        }
         if stat.is_dir() {
-            self.walk_dir(&target, &target);
+            if self.dirs.insert(target.clone()) {
+                self.walk_dir(&target, &target);
+            }
         } else {
-            self.files.push(target);
+            self.files.push(FontFile {
+                path: target.clone(),
+                canonical: target,
+            });
         }
     }
 }

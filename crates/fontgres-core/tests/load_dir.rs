@@ -62,6 +62,60 @@ fn a_large_directory_loads_in_directory_order() {
     assert_eq!(loaded, expected);
 }
 
+/// A directory holding a copy of Tuffy.
+fn dir_with_tuffy() -> std::io::Result<tempfile::TempDir> {
+    let dir = tempfile::tempdir()?;
+    std::fs::copy(TUFFY, dir.path().join("Tuffy.ttf"))?;
+    Ok(dir)
+}
+
+#[test]
+fn a_directory_loaded_twice_loads_its_fonts_once() {
+    let dir = dir_with_tuffy().unwrap();
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+    database.load_fonts_dir(dir.path());
+    assert_eq!(database.len(), 1);
+}
+
+/// Whichever of the directory and the file loads first, the font loads once.
+#[test]
+fn a_font_file_loaded_with_its_directory_loads_once() {
+    let dir = dir_with_tuffy().unwrap();
+    let font = dir.path().join("Tuffy.ttf");
+
+    let mut dir_first = Database::new();
+    dir_first.load_fonts_dir(dir.path());
+    dir_first.load_font_file(&font).unwrap();
+    assert_eq!(dir_first.len(), 1, "directory first");
+
+    let mut file_first = Database::new();
+    file_first.load_font_file(&font).unwrap();
+    file_first.load_fonts_dir(dir.path());
+    assert_eq!(file_first.len(), 1, "file first");
+}
+
+#[test]
+fn a_directory_loaded_again_loads_the_fonts_added_since() {
+    let dir = dir_with_tuffy().unwrap();
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+    std::fs::copy(TUFFY, dir.path().join("Tuffy2.ttf")).unwrap();
+    database.load_fonts_dir(dir.path());
+    assert_eq!(database.len(), 2);
+}
+
+#[test]
+fn a_removed_face_stays_removed_when_its_directory_loads_again() {
+    let dir = dir_with_tuffy().unwrap();
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+    let id = database.faces().next().unwrap().id;
+    database.remove_face(id);
+    database.load_fonts_dir(dir.path());
+    assert!(database.is_empty());
+}
+
 #[cfg(unix)]
 mod symlinks {
     use super::{TUFFY, faces_in};
@@ -161,6 +215,41 @@ mod symlinks {
             faces_with_dir_link_beside("b", "a").unwrap(),
             1,
             "link walked first"
+        );
+    }
+
+    /// Loads a directory of fonts and a directory of links to them, in two
+    /// calls, and counts the faces.
+    fn faces_with_links_loaded_after(links_first: bool) -> std::io::Result<usize> {
+        let fonts = tempfile::tempdir()?;
+        let target = fonts.path().join("Tuffy.ttf");
+        std::fs::copy(TUFFY, &target)?;
+        let links = tempfile::tempdir()?;
+        symlink(&target, links.path().join("Link.ttf"))?;
+
+        let mut database = Database::new();
+        let order = if links_first {
+            [links.path(), fonts.path()]
+        } else {
+            [fonts.path(), links.path()]
+        };
+        for dir in order {
+            database.load_fonts_dir(dir);
+        }
+        Ok(database.len())
+    }
+
+    #[test]
+    fn a_font_and_a_link_to_it_in_two_calls_load_once() {
+        assert_eq!(
+            faces_with_links_loaded_after(false).unwrap(),
+            1,
+            "fonts loaded first"
+        );
+        assert_eq!(
+            faces_with_links_loaded_after(true).unwrap(),
+            1,
+            "links loaded first"
         );
     }
 
