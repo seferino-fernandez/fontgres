@@ -769,7 +769,7 @@ impl Database {
     /// carries, under any of its names in any language, decides the result:
     /// among that family's faces the best stretch, then style, then weight is
     /// chosen as the CSS font matching algorithm does. Family names compare
-    /// exactly, so case matters.
+    /// ignoring ASCII case, as [`FaceInfo::has_family`] does.
     ///
     /// # Examples
     ///
@@ -784,7 +784,7 @@ impl Database {
     /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     ///
     /// let families = [Family::Name("tuffy")];
-    /// assert_eq!(db.query(&Query { families: &families, ..Query::default() }), None);
+    /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn query(&self, query: &Query) -> Option<ID> {
@@ -793,7 +793,7 @@ impl Database {
             let candidates: Vec<_> = self
                 .faces
                 .iter()
-                .filter(|(_, face)| face.families.iter().any(|family| family.0 == name))
+                .filter(|(_, face)| face.has_family(name))
                 .map(|(_, info)| info)
                 .collect();
 
@@ -959,6 +959,33 @@ pub struct FaceInfo {
     /// Whether the face's `post` table declares it monospaced; `false` when it
     /// has none.
     pub monospaced: bool,
+}
+
+impl FaceInfo {
+    /// Returns whether `name` is one of the face's
+    /// [`families`](FaceInfo::families), ignoring ASCII case.
+    ///
+    /// Letters outside ASCII must match in case as well, although CSS compares
+    /// family names with Unicode caseless matching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fontgres_core::Database;
+    ///
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// db.load_font_data(std::fs::read(path)?);
+    /// let face = db.faces().next().expect("Tuffy is loaded");
+    /// assert!(face.has_family("TUFFY"));
+    /// assert!(!face.has_family("Tuffy Sans"));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn has_family(&self, name: &str) -> bool {
+        self.families
+            .iter()
+            .any(|(family, _)| family.eq_ignore_ascii_case(name))
+    }
 }
 
 /// Holds or locates the data of a whole font, which may contain several faces.

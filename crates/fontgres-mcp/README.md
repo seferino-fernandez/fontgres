@@ -56,7 +56,7 @@ servers can tell this one's tools apart.
 Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1-1000),
 `style` (`normal`, `italic`, `oblique`), `stretch` (`ultra-condensed` ...
 `ultra-expanded`), `monospaced`, `path` and `index`. Family names in a query
-match exactly, case included; the generic names `serif`, `sans-serif`,
+match ignoring ASCII case; the generic names `serif`, `sans-serif`,
 `cursive`, `fantasy` and `monospace` resolve through `[fonts.generic]`.
 
 ### Tool calls

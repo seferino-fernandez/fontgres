@@ -10,6 +10,6 @@ system's installed fonts and any configured font directories and files.
   priority order; CSS generic names such as `sans-serif` work), `weight`
   (1–1000), `style` and `stretch`, as CSS font matching does.
 
-Family names in a query match exactly, case included, so look names up with
-the family list first. Every tool is read-only and rejects an argument it does
+Family names in a query match ignoring ASCII case; look names up with the
+family list first. Every tool is read-only and rejects an argument it does
 not declare, so send only the listed arguments.

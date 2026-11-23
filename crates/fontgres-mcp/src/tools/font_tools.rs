@@ -151,6 +151,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_font_matches_family_names_ignoring_case() {
+        let result = call_tool(
+            &tools(),
+            "fontgres_query_font",
+            json!({ "families": ["tuffy"] }),
+        )
+        .await;
+        assert_eq!(structured(result)["family"], "Tuffy");
+    }
+
+    #[tokio::test]
     async fn query_font_without_a_match_is_a_tool_error_with_a_hint() {
         let result = call_tool(
             &tools(),

@@ -18,9 +18,9 @@ pub(crate) struct FacesArgs {
 /// Arguments of `fontgres query`.
 #[derive(Args)]
 pub(crate) struct QueryArgs {
-    /// Families in priority order. Names match exactly, case included, as in
-    /// fontdb; `serif`, `sans-serif`, `cursive`, `fantasy` and `monospace`
-    /// resolve through the configured generic families.
+    /// Families in priority order. Names match ignoring ASCII case;
+    /// `serif`, `sans-serif`, `cursive`, `fantasy` and `monospace` resolve
+    /// through the configured generic families.
     #[arg(required = true, value_name = "FAMILY")]
     families: Vec<String>,
     /// Wanted weight: 100 (thin) to 900 (black); 400 is normal, 700 bold.
