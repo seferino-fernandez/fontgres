@@ -778,10 +778,8 @@ impl Database {
                 .map(|(_, info)| info)
                 .collect();
 
-            if !candidates.is_empty() {
-                if let Some(index) = find_best_match(&candidates, query) {
-                    return Some(candidates[index].id);
-                }
+            if let Some(face) = find_best_match(&candidates, query) {
+                return Some(face.id);
             }
         }
 
@@ -1408,137 +1406,97 @@ impl NameExt for ttf_parser::name::Name<'_> {
     }
 }
 
-// https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching
-// Based on https://github.com/servo/font-kit
+/// Returns the face CSS font matching picks from one family's `candidates`,
+/// or `None` when there are none.
+///
+/// Implements step 4 of
+/// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>,
+/// based on <https://github.com/servo/font-kit>. Step 4d (`font-size`) does
+/// not apply. Of the faces left equal after the steps, the first in
+/// `candidates` wins.
 #[inline(never)]
-fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
-    debug_assert!(!candidates.is_empty());
-
-    // Step 4.
-    let mut matching_set: Vec<usize> = (0..candidates.len()).collect();
+fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option<&'a FaceInfo> {
+    let mut matching_set = candidates.to_vec();
 
     // Step 4a (`font-stretch`).
-    let matches = matching_set
-        .iter()
-        .any(|&index| candidates[index].stretch == query.stretch);
-    let matching_stretch = if matches {
-        // Exact match.
-        query.stretch
-    } else if query.stretch <= Stretch::Normal {
-        // Closest stretch, first checking narrower values and then wider values.
-        let stretch = matching_set
-            .iter()
-            .filter(|&&index| candidates[index].stretch < query.stretch)
-            .min_by_key(|&&index| {
-                query.stretch.to_number() - candidates[index].stretch.to_number()
-            });
-
-        if let Some(&matching_index) = stretch {
-            candidates[matching_index].stretch
-        } else {
-            let matching_index = *matching_set.iter().min_by_key(|&&index| {
-                candidates[index].stretch.to_number() - query.stretch.to_number()
-            })?;
-
-            candidates[matching_index].stretch
-        }
-    } else {
-        // Closest stretch, first checking wider values and then narrower values.
-        let stretch = matching_set
-            .iter()
-            .filter(|&&index| candidates[index].stretch > query.stretch)
-            .min_by_key(|&&index| {
-                candidates[index].stretch.to_number() - query.stretch.to_number()
-            });
-
-        if let Some(&matching_index) = stretch {
-            candidates[matching_index].stretch
-        } else {
-            let matching_index = *matching_set.iter().min_by_key(|&&index| {
-                query.stretch.to_number() - candidates[index].stretch.to_number()
-            })?;
-
-            candidates[matching_index].stretch
-        }
-    };
-    matching_set.retain(|&index| candidates[index].stretch == matching_stretch);
+    let stretch = matching_stretch(&matching_set, query.stretch)?;
+    matching_set.retain(|face| face.stretch == stretch);
 
     // Step 4b (`font-style`).
-    let style_preference = match query.style {
+    let style = matching_style(&matching_set, query.style)?;
+    matching_set.retain(|face| face.style == style);
+
+    // Step 4c (`font-weight`).
+    let weight = matching_weight(&matching_set, query.weight)?;
+    matching_set.retain(|face| face.weight == weight);
+
+    matching_set.first().copied()
+}
+
+/// Returns the stretch of the face nearest `query`: an exact match, else the
+/// nearest narrower one then the nearest wider one for a query up to normal
+/// width, and the other way round for a wider query.
+fn matching_stretch(faces: &[&FaceInfo], query: Stretch) -> Option<Stretch> {
+    nearest(
+        faces,
+        |face| face.stretch.to_number(),
+        query.to_number(),
+        query <= Stretch::Normal,
+    )
+    .map(|face| face.stretch)
+}
+
+/// Returns the first style in the fallback order for `query` that one of
+/// `faces` has.
+fn matching_style(faces: &[&FaceInfo], query: Style) -> Option<Style> {
+    let preference = match query {
         Style::Italic => [Style::Italic, Style::Oblique, Style::Normal],
         Style::Oblique => [Style::Oblique, Style::Italic, Style::Normal],
         Style::Normal => [Style::Normal, Style::Oblique, Style::Italic],
     };
-    let matching_style = *style_preference.iter().find(|&query_style| {
-        matching_set
-            .iter()
-            .any(|&index| candidates[index].style == *query_style)
-    })?;
+    preference
+        .into_iter()
+        .find(|&style| faces.iter().any(|face| face.style == style))
+}
 
-    matching_set.retain(|&index| candidates[index].style == matching_style);
+/// Returns the weight of the face nearest `query`: an exact match, else 500
+/// for a query from 400 up to 450 and 400 for a query from 450 to 500, else
+/// the nearest lighter then the nearest heavier one for a query up to 500,
+/// and the other way round for a heavier query.
+///
+/// The spec does not say which way a query between 400 and 500 looks first,
+/// so 450 is the cutoff.
+fn matching_weight(faces: &[&FaceInfo], query: Weight) -> Option<Weight> {
+    let has = |weight: Weight| faces.iter().any(|face| face.weight == weight);
+    if has(query) {
+        return Some(query);
+    }
+    if (400..450).contains(&query.0) && has(Weight::MEDIUM) {
+        return Some(Weight::MEDIUM);
+    }
+    if (450..=500).contains(&query.0) && has(Weight::NORMAL) {
+        return Some(Weight::NORMAL);
+    }
+    nearest(faces, |face| face.weight.0, query.0, query.0 <= 500).map(|face| face.weight)
+}
 
-    // Step 4c (`font-weight`).
-    //
-    // The spec doesn't say what to do if the weight is between 400 and 500 exclusive, so we
-    // just use 450 as the cutoff.
-    let weight = query.weight.0;
-
-    let matching_weight = if matching_set
-        .iter()
-        .any(|&index| candidates[index].weight.0 == weight)
-    {
-        Weight(weight)
-    } else if (400..450).contains(&weight)
-        && matching_set
+/// Returns the first of `faces` whose `key` is nearest `target`, looking
+/// first at keys up to `target` when `lower_first` is set, else at keys from
+/// `target` up, and then at the other side.
+fn nearest<'a>(
+    faces: &[&'a FaceInfo],
+    key: impl Fn(&FaceInfo) -> u16,
+    target: u16,
+    lower_first: bool,
+) -> Option<&'a FaceInfo> {
+    let closest_on = |lower: bool| {
+        faces
             .iter()
-            .any(|&index| candidates[index].weight.0 == 500)
-    {
-        // Check 500 first.
-        Weight::MEDIUM
-    } else if (450..=500).contains(&weight)
-        && matching_set
-            .iter()
-            .any(|&index| candidates[index].weight.0 == 400)
-    {
-        // Check 400 first.
-        Weight::NORMAL
-    } else if weight <= 500 {
-        // Closest weight, first checking thinner values and then fatter ones.
-        let idx = matching_set
-            .iter()
-            .filter(|&&index| candidates[index].weight.0 <= weight)
-            .min_by_key(|&&index| weight - candidates[index].weight.0);
-
-        if let Some(&matching_index) = idx {
-            candidates[matching_index].weight
-        } else {
-            let matching_index = *matching_set
-                .iter()
-                .min_by_key(|&&index| candidates[index].weight.0 - weight)?;
-            candidates[matching_index].weight
-        }
-    } else {
-        // Closest weight, first checking fatter values and then thinner ones.
-        let idx = matching_set
-            .iter()
-            .filter(|&&index| candidates[index].weight.0 >= weight)
-            .min_by_key(|&&index| candidates[index].weight.0 - weight);
-
-        if let Some(&matching_index) = idx {
-            candidates[matching_index].weight
-        } else {
-            let matching_index = *matching_set
-                .iter()
-                .min_by_key(|&&index| weight - candidates[index].weight.0)?;
-            candidates[matching_index].weight
-        }
+            .copied()
+            .filter(|face| (key(face) <= target) == lower || key(face) == target)
+            .min_by_key(|face| key(face).abs_diff(target))
     };
-    matching_set.retain(|&index| candidates[index].weight == matching_weight);
-
-    // Ignore step 4d (`font-size`).
-
-    // Return the result.
-    matching_set.into_iter().next()
+    closest_on(lower_first).or_else(|| closest_on(!lower_first))
 }
 
 /// Macintosh Roman to UTF-16 encoding table.
