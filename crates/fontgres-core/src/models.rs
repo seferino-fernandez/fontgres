@@ -1,8 +1,8 @@
 //! Serializable views of the font database for the workspace binaries, and
 //! the font loading and querying they share.
 //!
-//! fontdb's own types are left untouched: [`Face`] is built from a
-//! [`FaceInfo`], so the CLI and MCP output stays stable if `FaceInfo`
+//! fontdb's own types are left untouched: [`Face`](crate::models::Face) is
+//! built from a [`FaceInfo`](crate::FaceInfo), so the CLI and MCP output stays stable if `FaceInfo`
 //! changes.
 
 use std::path::{Path, PathBuf};
