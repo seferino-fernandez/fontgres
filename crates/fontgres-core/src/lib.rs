@@ -182,7 +182,7 @@ impl core::fmt::Display for LoadError {
             LoadError::MalformedFont => write!(f, "malformed font"),
             LoadError::UnnamedFont => write!(f, "font doesn't have a family name"),
             #[cfg(feature = "std")]
-            LoadError::IoError(ref e) => write!(f, "{e}"),
+            LoadError::IoError(e) => write!(f, "{e}"),
         }
     }
 }
@@ -1122,10 +1122,10 @@ impl Source {
     {
         match &self {
             #[cfg(feature = "fs")]
-            Source::File(ref path) => with_file_data(path, p).ok(),
-            Source::Binary(ref data) => Some(p(data.as_ref().as_ref())),
+            Source::File(path) => with_file_data(path, p).ok(),
+            Source::Binary(data) => Some(p(data.as_ref().as_ref())),
             #[cfg(all(feature = "fs", feature = "memmap"))]
-            Source::SharedFile(_, ref data) => Some(p(data.as_ref().as_ref())),
+            Source::SharedFile(_, data) => Some(p(data.as_ref().as_ref())),
         }
     }
 }
@@ -1287,15 +1287,13 @@ fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Langu
     }
 
     // Make English US the first one.
-    if families.len() > 1 {
-        if let Some(index) = families
+    if families.len() > 1
+        && let Some(index) = families
             .iter()
             .position(|f| f.1 == Language::English_UnitedStates)
-        {
-            if index != 0 {
-                families.swap(0, index);
-            }
-        }
+        && index != 0
+    {
+        families.swap(0, index);
     }
 
     let (first_family, _) = families.first()?;
@@ -1317,10 +1315,11 @@ fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Langu
 fn collect_families(name_id: u16, names: &ttf_parser::name::Names<'_>) -> Vec<(String, Language)> {
     let mut families = Vec::new();
     for name in names.into_iter() {
-        if name.id == name_id && name.is_unicode() {
-            if let Some(family) = name_to_unicode(&name) {
-                families.push((family, name.language()));
-            }
+        if name.id == name_id
+            && name.is_unicode()
+            && let Some(family) = name_to_unicode(&name)
+        {
+            families.push((family, name.language()));
         }
     }
 
@@ -1330,11 +1329,12 @@ fn collect_families(name_id: u16, names: &ttf_parser::name::Names<'_>) -> Vec<(S
         .any(|f| f.1 == Language::English_UnitedStates)
     {
         for name in names.into_iter() {
-            if name.id == name_id && name.is_mac_roman() {
-                if let Some(family) = name_to_unicode(&name) {
-                    families.push((family, name.language()));
-                    break;
-                }
+            if name.id == name_id
+                && name.is_mac_roman()
+                && let Some(family) = name_to_unicode(&name)
+            {
+                families.push((family, name.language()));
+                break;
             }
         }
     }

@@ -1,9 +1,7 @@
 [package]
 name = "fontgres-core"
 version.workspace = true
-# fontdb is written for edition 2018 and does not compile under 2024; 2021
-# compiles it unchanged. Moves to the workspace edition with the lint cleanup.
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
