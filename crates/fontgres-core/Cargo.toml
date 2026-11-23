@@ -105,7 +105,7 @@ similar_names = "allow"
 
 # Keep functions small, matches exhaustive, and output deliberate
 clone_on_ref_ptr = "warn"
-cognitive_complexity = "allow"  # fontdb import
+cognitive_complexity = "warn"
 exit = "warn"
 infinite_loop = "warn"
 print_stderr = "warn"
@@ -171,7 +171,6 @@ match_same_arms = "allow"
 missing_errors_doc = "allow"
 needless_pass_by_value = "allow"
 struct_field_names = "allow"
-too_many_lines = "allow"
 trivially_copy_pass_by_ref = "allow"
 unnested_or_patterns = "allow"
 unreadable_literal = "allow"
