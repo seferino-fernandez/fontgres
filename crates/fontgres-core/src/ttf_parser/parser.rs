@@ -159,7 +159,7 @@ pub(crate) struct LazyArrayIter16<'a, T> {
     index: u16,
 }
 
-impl<'a, T: FromData> Iterator for LazyArrayIter16<'a, T> {
+impl<T: FromData> Iterator for LazyArrayIter16<'_, T> {
     type Item = T;
 
     #[inline]
@@ -250,7 +250,7 @@ impl<'a> Stream<'a> {
         // An integer overflow here on 32bit systems is almost guarantee to be caused
         // by an incorrect parsing logic from the caller side.
         // Simply using `checked_add` here would silently swallow errors, which is not what we want.
-        debug_assert!(self.offset as u64 + len as u64 <= u32::MAX as u64);
+        debug_assert!(u32::try_from(self.offset as u64 + len as u64).is_ok());
 
         let v = self.data.get(self.offset..self.offset + len)?;
         self.advance(len);

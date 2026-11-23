@@ -143,7 +143,7 @@ impl ID {
     /// [`Database::push_face_info`], which replaces it.
     #[inline]
     pub fn dummy() -> Self {
-        Self(InnerId::from(slotmap::KeyData::from_ffi(core::u64::MAX)))
+        Self(InnerId::from(slotmap::KeyData::from_ffi(u64::MAX)))
     }
 }
 
@@ -182,7 +182,7 @@ impl core::fmt::Display for LoadError {
             LoadError::MalformedFont => write!(f, "malformed font"),
             LoadError::UnnamedFont => write!(f, "font doesn't have a family name"),
             #[cfg(feature = "std")]
-            LoadError::IoError(ref e) => write!(f, "{}", e),
+            LoadError::IoError(ref e) => write!(f, "{e}"),
         }
     }
 }
@@ -285,11 +285,9 @@ impl Database {
                         });
                         ids.push(ID(id));
                     }
-                    Err(e) => log::warn!(
-                        "Failed to load a font face {} from source cause {}.",
-                        index,
-                        e
-                    ),
+                    Err(e) => {
+                        log::warn!("Failed to load a font face {index} from source cause {e}.");
+                    }
                 }
             }
 
@@ -299,7 +297,7 @@ impl Database {
         ids.unwrap_or_default()
     }
 
-    /// Backend function used by load_font_file to load font files.
+    /// Backend function used by `load_font_file` to load font files.
     #[cfg(feature = "fs")]
     fn load_fonts_from_file(&mut self, path: &std::path::Path, data: &[u8]) {
         let source = Source::File(path.into());
@@ -316,7 +314,7 @@ impl Database {
                         index,
                         path.display(),
                         e
-                    )
+                    );
                 }
             }
         }
@@ -359,7 +357,7 @@ impl Database {
     /// fails to parse, is skipped and logged as a warning.
     #[cfg(feature = "fs")]
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
-        self.load_fonts_dir_impl(dir.as_ref(), &mut Default::default())
+        self.load_fonts_dir_impl(dir.as_ref(), &mut Default::default());
     }
 
     #[cfg(feature = "fs")]
@@ -382,14 +380,14 @@ impl Database {
         }
 
         if seen.is_empty() && file_type.is_dir() {
-            seen.reserve(8192 / std::mem::size_of::<std::path::PathBuf>());
+            seen.reserve(8192 / size_of::<std::path::PathBuf>());
 
-            for (_, info) in self.faces.iter() {
+            for (_, info) in &self.faces {
                 let path = match &info.source {
                     Source::Binary(_) => continue,
-                    Source::File(path) => path.to_path_buf(),
+                    Source::File(path) => path.clone(),
                     #[cfg(feature = "memmap")]
-                    Source::SharedFile(path, _) => path.to_path_buf(),
+                    Source::SharedFile(path, _) => path.clone(),
                 };
                 seen.insert(path);
             }
@@ -1014,7 +1012,7 @@ impl core::fmt::Debug for Source {
 }
 
 /// The directories holding the system-wide fontconfig configuration,
-/// `fonts.conf` and `local.conf`. On FreeBSD and DragonFly, fontconfig
+/// `fonts.conf` and `local.conf`. On FreeBSD and `DragonFly`, fontconfig
 /// installed from ports reads its configuration from `/usr/local/etc/fonts`.
 #[cfg(all(
     feature = "fontconfig",
@@ -1435,15 +1433,14 @@ fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
                 query.stretch.to_number() - candidates[index].stretch.to_number()
             });
 
-        match stretch {
-            Some(&matching_index) => candidates[matching_index].stretch,
-            None => {
-                let matching_index = *matching_set.iter().min_by_key(|&&index| {
-                    candidates[index].stretch.to_number() - query.stretch.to_number()
-                })?;
+        if let Some(&matching_index) = stretch {
+            candidates[matching_index].stretch
+        } else {
+            let matching_index = *matching_set.iter().min_by_key(|&&index| {
+                candidates[index].stretch.to_number() - query.stretch.to_number()
+            })?;
 
-                candidates[matching_index].stretch
-            }
+            candidates[matching_index].stretch
         }
     } else {
         // Closest stretch, first checking wider values and then narrower values.
@@ -1454,15 +1451,14 @@ fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
                 candidates[index].stretch.to_number() - query.stretch.to_number()
             });
 
-        match stretch {
-            Some(&matching_index) => candidates[matching_index].stretch,
-            None => {
-                let matching_index = *matching_set.iter().min_by_key(|&&index| {
-                    query.stretch.to_number() - candidates[index].stretch.to_number()
-                })?;
+        if let Some(&matching_index) = stretch {
+            candidates[matching_index].stretch
+        } else {
+            let matching_index = *matching_set.iter().min_by_key(|&&index| {
+                query.stretch.to_number() - candidates[index].stretch.to_number()
+            })?;
 
-                candidates[matching_index].stretch
-            }
+            candidates[matching_index].stretch
         }
     };
     matching_set.retain(|&index| candidates[index].stretch == matching_stretch);
@@ -1513,14 +1509,13 @@ fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
             .filter(|&&index| candidates[index].weight.0 <= weight)
             .min_by_key(|&&index| weight - candidates[index].weight.0);
 
-        match idx {
-            Some(&matching_index) => candidates[matching_index].weight,
-            None => {
-                let matching_index = *matching_set
-                    .iter()
-                    .min_by_key(|&&index| candidates[index].weight.0 - weight)?;
-                candidates[matching_index].weight
-            }
+        if let Some(&matching_index) = idx {
+            candidates[matching_index].weight
+        } else {
+            let matching_index = *matching_set
+                .iter()
+                .min_by_key(|&&index| candidates[index].weight.0 - weight)?;
+            candidates[matching_index].weight
         }
     } else {
         // Closest weight, first checking fatter values and then thinner ones.
@@ -1529,14 +1524,13 @@ fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
             .filter(|&&index| candidates[index].weight.0 >= weight)
             .min_by_key(|&&index| candidates[index].weight.0 - weight);
 
-        match idx {
-            Some(&matching_index) => candidates[matching_index].weight,
-            None => {
-                let matching_index = *matching_set
-                    .iter()
-                    .min_by_key(|&&index| weight - candidates[index].weight.0)?;
-                candidates[matching_index].weight
-            }
+        if let Some(&matching_index) = idx {
+            candidates[matching_index].weight
+        } else {
+            let matching_index = *matching_set
+                .iter()
+                .min_by_key(|&&index| weight - candidates[index].weight.0)?;
+            candidates[matching_index].weight
         }
     };
     matching_set.retain(|&index| candidates[index].weight == matching_weight);
@@ -1549,7 +1543,7 @@ fn find_best_match(candidates: &[&FaceInfo], query: &Query) -> Option<usize> {
 
 /// Macintosh Roman to UTF-16 encoding table.
 ///
-/// https://en.wikipedia.org/wiki/Mac_OS_Roman
+/// <https://en.wikipedia.org/wiki/Mac_OS_Roman>
 #[rustfmt::skip]
 const MAC_ROMAN: &[u16; 256] = &[
     0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
