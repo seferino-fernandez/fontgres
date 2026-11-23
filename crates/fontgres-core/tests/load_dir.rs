@@ -65,6 +65,7 @@ fn a_large_directory_loads_in_directory_order() {
 #[cfg(unix)]
 mod symlinks {
     use super::{TUFFY, faces_in};
+    use fontgres_core::{Database, Source};
     use std::os::unix::fs::symlink;
 
     /// Content-addressed stores name files by hash and link font names to them.
@@ -99,5 +100,107 @@ mod symlinks {
         symlink(&blob, fonts.path().join("Tuffy")).unwrap();
 
         assert_eq!(faces_in(fonts.path()), 0);
+    }
+
+    /// Links the font in `real` from `link`, two sibling directories of one
+    /// walk, and counts the faces the walk loads.
+    fn faces_with_link_beside(real: &str, link: &str) -> std::io::Result<usize> {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join(real).join("Tuffy.ttf");
+        std::fs::create_dir(dir.path().join(real))?;
+        std::fs::create_dir(dir.path().join(link))?;
+        std::fs::copy(TUFFY, &target)?;
+        symlink(&target, dir.path().join(link).join("Link.ttf"))?;
+        Ok(faces_in(dir.path()))
+    }
+
+    /// Whichever of the file and the link the walk reaches first, the font
+    /// loads once.
+    #[test]
+    fn a_font_and_a_link_to_it_in_one_walk_load_once() {
+        assert_eq!(
+            faces_with_link_beside("a", "b").unwrap(),
+            1,
+            "file walked first"
+        );
+        assert_eq!(
+            faces_with_link_beside("b", "a").unwrap(),
+            1,
+            "link walked first"
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_directory_loads_the_fonts_in_it() {
+        let store = tempfile::tempdir().unwrap();
+        std::fs::copy(TUFFY, store.path().join("Tuffy.ttf")).unwrap();
+        let fonts = tempfile::tempdir().unwrap();
+        symlink(store.path(), fonts.path().join("linked")).unwrap();
+
+        assert_eq!(faces_in(fonts.path()), 1);
+    }
+
+    /// Links a directory of fonts from `link`, a sibling of the directory, and
+    /// counts the faces the walk loads.
+    fn faces_with_dir_link_beside(real: &str, link: &str) -> std::io::Result<usize> {
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join(real))?;
+        std::fs::copy(TUFFY, dir.path().join(real).join("Tuffy.ttf"))?;
+        symlink(dir.path().join(real), dir.path().join(link))?;
+        Ok(faces_in(dir.path()))
+    }
+
+    #[test]
+    fn a_directory_and_a_link_to_it_in_one_walk_load_its_fonts_once() {
+        assert_eq!(
+            faces_with_dir_link_beside("a", "b").unwrap(),
+            1,
+            "directory walked first"
+        );
+        assert_eq!(
+            faces_with_dir_link_beside("b", "a").unwrap(),
+            1,
+            "link walked first"
+        );
+    }
+
+    /// A directory reached through a link, like `/tmp` on macOS, holding a
+    /// font and a link to it. Returns the store that holds both and the
+    /// linked path.
+    fn linked_root() -> std::io::Result<(tempfile::TempDir, std::path::PathBuf)> {
+        let store = tempfile::tempdir()?;
+        let real = store.path().join("real");
+        std::fs::create_dir(&real)?;
+        std::fs::copy(TUFFY, real.join("Tuffy.ttf"))?;
+        symlink(real.join("Tuffy.ttf"), real.join("Link.ttf"))?;
+        let root = store.path().join("root");
+        symlink(&real, &root)?;
+        Ok((store, root))
+    }
+
+    #[test]
+    fn a_font_and_a_link_to_it_under_a_linked_root_load_once() {
+        let (_store, root) = linked_root().unwrap();
+        assert_eq!(faces_in(&root), 1);
+    }
+
+    /// A font file that is not a link keeps the path the walk reached it by.
+    #[test]
+    fn a_font_keeps_the_path_it_was_found_at() {
+        let (_store, root) = linked_root().unwrap();
+        std::fs::remove_file(root.join("Link.ttf")).unwrap();
+
+        let mut database = Database::new();
+        database.load_fonts_dir(&root);
+        let paths: Vec<_> = database
+            .faces()
+            .map(|face| {
+                let Source::File(path) = &face.source else {
+                    panic!("{:?} is not a file source", face.source);
+                };
+                path.clone()
+            })
+            .collect();
+        assert_eq!(paths, [root.join("Tuffy.ttf")]);
     }
 }

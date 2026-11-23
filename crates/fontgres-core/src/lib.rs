@@ -360,8 +360,9 @@ impl Database {
     ///
     /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension, in any case,
     /// load. Symbolic links are followed, and a link loads when either its own
-    /// name or its target's has such an extension. A file reached through a
-    /// link that is already in the database is not loaded again.
+    /// name or its target's has such an extension. A file loads once however
+    /// many links lead to it within `dir`; a file an earlier call loaded
+    /// loads again.
     ///
     /// Nothing here is an error. A directory that does not exist or cannot be
     /// read adds nothing, silently. A file that cannot be read, and a face that
@@ -369,81 +370,8 @@ impl Database {
     #[cfg(feature = "fs")]
     pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
         let mut walk = FontDirWalk::default();
-        self.find_font_files(dir.as_ref(), &mut walk);
+        walk.find_font_files(dir.as_ref());
         self.load_font_files(&walk.files);
-    }
-
-    #[cfg(feature = "fs")]
-    fn canonicalize(
-        &self,
-        path: std::path::PathBuf,
-        entry: &std::fs::DirEntry,
-        walk: &mut FontDirWalk,
-    ) -> Option<(std::path::PathBuf, std::fs::FileType)> {
-        let seen = &mut walk.seen;
-        let file_type = entry.file_type().ok()?;
-        if !file_type.is_symlink() {
-            if !seen.is_empty() {
-                if seen.contains(&path) {
-                    return None;
-                }
-                seen.insert(path.clone());
-            }
-
-            return Some((path, file_type));
-        }
-
-        if seen.is_empty() && file_type.is_dir() {
-            const CAPACITY: usize = 8192 / size_of::<std::path::PathBuf>();
-            seen.reserve(CAPACITY);
-
-            for (_, info) in &self.faces {
-                let loaded = match &info.source {
-                    Source::Binary(_) => continue,
-                    Source::File(loaded) => loaded.clone(),
-                    #[cfg(feature = "memmap")]
-                    Source::SharedFile(loaded, _) => loaded.clone(),
-                };
-                seen.insert(loaded);
-            }
-        }
-
-        let stat = std::fs::metadata(&path).ok()?;
-        if stat.is_symlink() {
-            return None;
-        }
-
-        let canon = std::fs::canonicalize(path).ok()?;
-        if seen.contains(&canon) {
-            return None;
-        }
-        seen.insert(canon.clone());
-        Some((canon, stat.file_type()))
-    }
-
-    /// Adds the font files in `dir` and its subdirectories to `walk`, in the
-    /// order [`load_fonts_dir`](Database::load_fonts_dir) documents.
-    #[cfg(feature = "fs")]
-    fn find_font_files(&self, dir: &std::path::Path, walk: &mut FontDirWalk) {
-        let Ok(fonts_dir) = std::fs::read_dir(dir) else {
-            return;
-        };
-
-        for entry in fonts_dir.flatten() {
-            // A link counts when either its own name or its target's has a
-            // font extension: content-addressed stores link font names to
-            // files named by hash.
-            let link_is_font = has_font_extension(&entry.path());
-            let Some((path, file_type)) = self.canonicalize(entry.path(), &entry, walk) else {
-                continue;
-            };
-
-            if file_type.is_file() && (link_is_font || has_font_extension(&path)) {
-                walk.files.push(path);
-            } else if file_type.is_dir() {
-                self.find_font_files(&path, walk);
-            }
-        }
     }
 
     /// Loads the fonts installed on the system by scanning its font directories.
@@ -477,20 +405,16 @@ impl Database {
             let mut walk = FontDirWalk::default();
             if let Some(ref system_root) = std::env::var_os("SYSTEMROOT") {
                 let system_root_path = std::path::Path::new(system_root);
-                self.find_font_files(&system_root_path.join("Fonts"), &mut walk);
+                walk.find_font_files(&system_root_path.join("Fonts"));
             } else {
-                self.find_font_files("C:\\Windows\\Fonts\\".as_ref(), &mut walk);
+                walk.find_font_files("C:\\Windows\\Fonts\\".as_ref());
             }
 
             if let Ok(ref home) = std::env::var("USERPROFILE") {
                 let home_path = std::path::Path::new(home);
-                self.find_font_files(
-                    &home_path.join("AppData\\Local\\Microsoft\\Windows\\Fonts"),
-                    &mut walk,
-                );
-                self.find_font_files(
+                walk.find_font_files(&home_path.join("AppData\\Local\\Microsoft\\Windows\\Fonts"));
+                walk.find_font_files(
                     &home_path.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"),
-                    &mut walk,
                 );
             }
             self.load_font_files(&walk.files);
@@ -499,8 +423,8 @@ impl Database {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             let mut walk = FontDirWalk::default();
-            self.find_font_files("/Library/Fonts".as_ref(), &mut walk);
-            self.find_font_files("/System/Library/Fonts".as_ref(), &mut walk);
+            walk.find_font_files("/Library/Fonts".as_ref());
+            walk.find_font_files("/System/Library/Fonts".as_ref());
             // Downloadable fonts, location varies on major macOS releases
             let assets = std::fs::read_dir("/System/Library/AssetsV2")
                 .into_iter()
@@ -513,13 +437,13 @@ impl Database {
                         .starts_with("com_apple_MobileAsset_Font")
                 });
             for entry in assets {
-                self.find_font_files(&entry.path(), &mut walk);
+                walk.find_font_files(&entry.path());
             }
-            self.find_font_files("/Network/Library/Fonts".as_ref(), &mut walk);
+            walk.find_font_files("/Network/Library/Fonts".as_ref());
 
             if let Ok(ref home) = std::env::var("HOME") {
                 let home_path = std::path::Path::new(home);
-                self.find_font_files(&home_path.join("Library/Fonts"), &mut walk);
+                walk.find_font_files(&home_path.join("Library/Fonts"));
             }
             self.load_font_files(&walk.files);
         }
@@ -550,13 +474,13 @@ impl Database {
     ))]
     fn load_no_fontconfig(&mut self) {
         let mut walk = FontDirWalk::default();
-        self.find_font_files("/usr/share/fonts/".as_ref(), &mut walk);
-        self.find_font_files("/usr/local/share/fonts/".as_ref(), &mut walk);
+        walk.find_font_files("/usr/share/fonts/".as_ref());
+        walk.find_font_files("/usr/local/share/fonts/".as_ref());
 
         if let Ok(ref home) = std::env::var("HOME") {
             let home_path = std::path::Path::new(home);
-            self.find_font_files(&home_path.join(".fonts"), &mut walk);
-            self.find_font_files(&home_path.join(".local/share/fonts"), &mut walk);
+            walk.find_font_files(&home_path.join(".fonts"));
+            walk.find_font_files(&home_path.join(".local/share/fonts"));
         }
         self.load_font_files(&walk.files);
     }
@@ -609,7 +533,7 @@ impl Database {
                 .into_iter()
                 .filter_map(|dir| expand_home(dir.path, home));
             for path in dirs {
-                self.find_font_files(&path, &mut walk);
+                walk.find_font_files(&path);
             }
             self.load_font_files(&walk.files);
         }
@@ -1082,13 +1006,87 @@ fn has_font_extension(path: &std::path::Path) -> bool {
         })
 }
 
-/// A walk over font directories: the paths visited, to load each file once
-/// however many links lead to it, and the font files found, in walk order.
+/// A walk over font directories: the canonical paths of the files and
+/// directories reached, to load each once however many paths lead to it, and
+/// the font files found, in walk order.
 #[cfg(feature = "fs")]
 #[derive(Default)]
 struct FontDirWalk {
     seen: std::collections::HashSet<std::path::PathBuf>,
     files: Vec<std::path::PathBuf>,
+}
+
+#[cfg(feature = "fs")]
+impl FontDirWalk {
+    /// Adds the font files in `dir` and its subdirectories, in the order
+    /// [`load_fonts_dir`](Database::load_fonts_dir) documents, skipping each
+    /// file and directory the walk already reached by another path.
+    fn find_font_files(&mut self, dir: &std::path::Path) {
+        // Canonicalizing the root once and joining each entry's name to it
+        // gives every entry that is not a link its canonical path, so the walk
+        // costs one canonicalization per root and per link, not per file. A
+        // root that can be read but not canonicalized is still walked, under
+        // the path it was given.
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if self.seen.insert(canonical.clone()) {
+            self.walk_dir(dir, &canonical);
+        }
+    }
+
+    /// Walks `dir`, whose canonical path is `canonical`. Files keep the path
+    /// they were found at.
+    fn walk_dir(&mut self, dir: &std::path::Path, canonical: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_symlink() {
+                self.follow_link(&path);
+            } else if file_type.is_dir() {
+                let key = canonical.join(entry.file_name());
+                if self.seen.insert(key.clone()) {
+                    self.walk_dir(&path, &key);
+                }
+            } else if file_type.is_file()
+                && has_font_extension(&path)
+                && self.seen.insert(canonical.join(entry.file_name()))
+            {
+                self.files.push(path);
+            }
+        }
+    }
+
+    /// Adds the font file or walks the directory `link` leads to, by its
+    /// canonical path.
+    fn follow_link(&mut self, link: &std::path::Path) {
+        let Ok(stat) = std::fs::metadata(link) else {
+            return;
+        };
+        if !stat.is_file() && !stat.is_dir() {
+            return;
+        }
+        let Ok(target) = std::fs::canonicalize(link) else {
+            return;
+        };
+        // A link counts when either its own name or its target's has a font
+        // extension: content-addressed stores link font names to files named
+        // by hash.
+        if stat.is_file() && !has_font_extension(link) && !has_font_extension(&target) {
+            return;
+        }
+        if !self.seen.insert(target.clone()) {
+            return;
+        }
+        if stat.is_dir() {
+            self.walk_dir(&target, &target);
+        } else {
+            self.files.push(target);
+        }
+    }
 }
 
 /// Every face of a font file, or the error that kept the file from being read.
