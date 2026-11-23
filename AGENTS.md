@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`fontgres-core` owns the FONTGRES API client: requests, configuration, models and errors. `fontgres-cli` and `fontgres-mcp` adapt it to a terminal and to MCP, so API behaviour changes land in core.
+`fontgres-core` owns the font database (forked from fontdb 0.24.0) and what the binaries share: configuration, font loading, queries, the serializable font views and errors. `fontgres-cli` and `fontgres-mcp` adapt it to a terminal and to MCP, so font behaviour changes land in core. The imported fontdb code runs under relaxed lints, listed under "fontdb import" in `crates/fontgres-core/Cargo.toml`; new code there should still meet the workspace lints.
 
 ## Quality gates
 

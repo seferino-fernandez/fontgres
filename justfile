@@ -40,11 +40,6 @@ test:
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
-# Run live integration tests against a real API instance
-# (set FONTGRES_BASE_URL and FONTGRES_API_KEY first).
-integration:
-	cargo test --test endpoints -p fontgres-core -- --ignored --nocapture
-
 # Lint the code with Clippy, failing on any warning
 lint:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

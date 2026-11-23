@@ -1,22 +1,23 @@
 # fontgres
 
-An HTTP API wrapped as three Rust crates: a library, a CLI, and an MCP server.
-Requests are authenticated with a single long-lived API key sent as an
-`X-Api-Key` header against a configurable base URL.
+A fork of [fontdb](https://github.com/RazrFalcon/fontdb), the in-memory font
+database with CSS-like queries, with a CLI and an MCP server on top: list the
+fonts on a machine and find the face that best matches a CSS-style query, from
+a terminal or from an LLM client. (The name is a nod to fontdb, nothing more.)
 
 ## Crates
 
 | Crate | Description |
 | --- | --- |
-| `fontgres-core` | Async API client library |
+| `fontgres-core` | Font database library (forked from fontdb 0.24.0) |
 | `fontgres-cli` | Terminal CLI (`fontgres`) |
 | `fontgres-mcp` | MCP server (`fontgres-mcp`) for LLM clients |
 
-The CLI and the MCP server both depend on the core library, so the request,
-auth, config, and error handling live in one place:
+The CLI and the MCP server both depend on the core library, so font loading,
+queries, configuration and errors live in one place:
 
 ```text
-            fontgres-core  (ApiClient, Config, models, errors)
+            fontgres-core  (Database, Config, models, errors)
               /     \
        fontgres-cli   fontgres-mcp
      (clap CLI)   (MCP tools)
@@ -36,22 +37,24 @@ Run the project's tests:
 cargo test
 ```
 
-Run a command from the CLI module:
+Run a command from the CLI:
 
 ```shell
-FONTGRES_BASE_URL=http://localhost:8080 FONTGRES_API_KEY=xxxx cargo run -p fontgres-cli -- status
+cargo run -p fontgres-cli -- families
+cargo run -p fontgres-cli -- query "Helvetica Neue" sans-serif --weight 700
 ```
 
 ## Configuration
 
 Configuration is layered, highest precedence first:
-CLI flag, then `FONTGRES_*` env, then `FONTGRES_*_FILE` env, then `config.toml`, then
-built-in defaults. See [`config.toml.example`](config.toml.example) for every setting.
-Only the winning layer of a secret is read, so a `*_FILE` behind a higher layer
-is never opened. Mistakes fail at startup: an env value that
-does not parse is an error naming the variable, a config file named by
-`--config` or `FONTGRES_CONFIG` must exist, and a TOML error reports the line and
-column without echoing the line.
+CLI flag, then `FONTGRES_*` env, then `config.toml`, then built-in defaults.
+It chooses which fonts load (`[fonts]`: the system's fonts, extra directories
+and files, and the families the CSS generic names resolve to) and the log level.
+See [`config.toml.example`](config.toml.example) for every setting. Mistakes
+fail at startup: an env value that does not parse is an error naming the
+variable, a config file named by `--config` or `FONTGRES_CONFIG` must exist, a
+font directory or file that is missing is named, and a TOML error reports the
+line and column.
 
 ## Logging and verbosity flag
 
@@ -63,8 +66,9 @@ highest first:
 
 The built-in default is `error` for the `fontgres` CLI and `info` for the
 `fontgres-mcp` server. An invalid configured level prints a warning and falls back
-to that default. Place the flag before the subcommand: `fontgres -v status`.
-`RUST_LOG` overrides everything (e.g. `RUST_LOG=fontgres_core=trace,reqwest=debug`).
+to that default. Place the flag before the subcommand: `fontgres -v faces`.
+`RUST_LOG` overrides everything (e.g. `RUST_LOG=fontgres_core=trace`). fontdb's
+own `log` warnings, such as a file it cannot parse, follow the same level.
 
 ## Shell completions
 
@@ -115,22 +119,15 @@ fontgres man ~/.local/share/man/man1
 
 ## MCP server
 
-`fontgres-mcp` implements MCP **2026-07-28** (`rmcp 3.x`) and exposes the same API to
-LLM clients through the following transports:
+`fontgres-mcp` implements MCP **2026-07-28** (`rmcp 3.x`) and exposes the font
+database to LLM clients over `stdio`, for local clients such as Claude Desktop.
+It loads its fonts once at startup, from the same configuration and flags as
+the CLI, and logs to stderr.
 
-- `stdio`: for local clients such as Claude Desktop.
-Launch `fontgres-mcp` from your MCP client with `FONTGRES_BASE_URL` and `FONTGRES_API_KEY`
-in its environment. The server defaults to stdio; logs go to stderr.
-
-Tool names carry a `fontgres_` prefix. Tool input schemas are closed
-(`additionalProperties: false`) and unknown arguments are refused, tool results
-are capped to a configurable byte budget, and destructive tools ask capable clients
-for confirmation (`confirm_destructive`). Tool results pass through
-`Redacted<T>`, which masks the credential forms listed in the
-[`fontgres-core` README](crates/fontgres-core/README.md#redaction) and the configured API key;
-it is pattern-based, so a secret in a shape it does not recognize is not
-masked. Both the CLI and the MCP server show errors only through
-`Error::public_message()`, never an upstream body or URL. See the
+Three read-only tools, `fontgres_list_faces`, `fontgres_list_families` and
+`fontgres_query_font`, answer from that snapshot. Tool input schemas are closed
+(`additionalProperties: false`), unknown arguments are refused, and tool
+results are capped to a configurable byte budget. See the
 [`fontgres-mcp` README](crates/fontgres-mcp/README.md) for details.
 
 ## Quality guardrails

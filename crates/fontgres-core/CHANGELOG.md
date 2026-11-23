@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+fontgres-core is forked from fontdb 0.24.0 (commit `ecb707e`). Entries below
+this point are fontdb's own history.
+
+### Changed
+- Renamed to `fontgres-core`, built as edition 2021.
+- `log` records reach the binaries through `tracing`.
+- Optional `cli` and `schema` features add the configuration, font views and
+  shell helpers the `fontgres` CLI and `fontgres-mcp` server share.
+
+### Removed
+- `Database::make_shared_face_data`, the public `unsafe` function.
+
 ## [0.24.0] - 2026-07-29
 ### Added
 - Support loading system fonts on iOS.
