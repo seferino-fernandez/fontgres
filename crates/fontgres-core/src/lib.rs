@@ -333,7 +333,7 @@ impl Database {
     /// Returns the I/O error when the file cannot be opened or read, or, with
     /// the `memmap` feature, cannot be memory-mapped. The database is
     /// unchanged.
-    #[cfg(all(feature = "fs", feature = "memmap"))]
+    #[cfg(feature = "fs")]
     pub fn load_font_file<P: AsRef<std::path::Path>>(
         &mut self,
         path: P,
@@ -342,68 +342,9 @@ impl Database {
     }
 
     // A non-generic version.
-    #[cfg(all(feature = "fs", feature = "memmap"))]
+    #[cfg(feature = "fs")]
     fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        let file = std::fs::File::open(path)?;
-        #[expect(
-            unsafe_code,
-            reason = "mapping reads only the pages parsing touches; nothing enforces that the file stays unchanged, as the crate docs disclose"
-        )]
-        // SAFETY:
-        // Operation: `MmapOptions::map(&file)`.
-        // Contract (memmap2 0.9, `Mmap` docs): using the map is undefined
-        // behavior if the underlying file is modified, in or out of process,
-        // while the map is in use.
-        // Not discharged: nothing here stops another process, another thread,
-        // or a `log` backend called while the faces parse from truncating or
-        // rewriting the file while `mmap` is alive. The crate docs disclose
-        // this under "Memory-mapped files". `mmap` drops when this function
-        // returns, which ends the exposure.
-        let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
-        // Parsing a face reads a few KiB of tables (`name`, `OS/2`, `post`)
-        // spread over the file. With the default sequential readahead each page
-        // fault pulls a whole readahead window, up to 4 MiB on btrfs, so listing
-        // thousands of installed faces reads gigabytes. The hint only affects
-        // performance, so a failure is logged and ignored.
-        #[cfg(unix)]
-        if let Err(error) = mmap.advise(memmap2::Advice::Random) {
-            log::debug!(
-                "Failed to mark '{}' as random access: {}.",
-                path.display(),
-                error
-            );
-        }
-
-        self.load_fonts_from_file(path, &mmap);
-        Ok(())
-    }
-
-    /// Loads every face in the font file at `path`.
-    ///
-    /// A collection adds one face per font it contains. A face that fails to
-    /// parse is skipped and logged as a warning, so a readable file that is not
-    /// a font returns `Ok` and adds nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns the I/O error when the file cannot be opened or read, or, with
-    /// the `memmap` feature, cannot be memory-mapped. The database is
-    /// unchanged.
-    #[cfg(all(feature = "fs", not(feature = "memmap")))]
-    pub fn load_font_file<P: AsRef<std::path::Path>>(
-        &mut self,
-        path: P,
-    ) -> Result<(), std::io::Error> {
-        self.load_font_file_impl(path.as_ref())
-    }
-
-    // A non-generic version.
-    #[cfg(all(feature = "fs", not(feature = "memmap")))]
-    fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        let data = std::fs::read(path)?;
-
-        self.load_fonts_from_file(path, &data);
-        Ok(())
+        with_file_data(path, |data| self.load_fonts_from_file(path, data))
     }
 
     /// Loads every font file in `dir` and its subdirectories.
@@ -1108,50 +1049,66 @@ fn has_font_extension(path: &std::path::Path) -> bool {
         })
 }
 
+/// Calls `f` with the contents of the file at `path` and returns what `f`
+/// returns.
+///
+/// With the `memmap` feature the file is memory-mapped for the length of the
+/// call; without it, the file is read into memory.
+#[cfg(feature = "fs")]
+fn with_file_data<T, F>(path: &std::path::Path, f: F) -> Result<T, std::io::Error>
+where
+    F: FnOnce(&[u8]) -> T,
+{
+    #[cfg(not(feature = "memmap"))]
+    let data = std::fs::read(path)?;
+    #[cfg(feature = "memmap")]
+    let data = {
+        let file = std::fs::File::open(path)?;
+        #[expect(
+            unsafe_code,
+            reason = "mapping reads only the pages `f` touches; nothing enforces that the file stays unchanged, as the crate docs disclose"
+        )]
+        // SAFETY:
+        // Operation: `MmapOptions::map(&file)`.
+        // Contract (memmap2 0.9, `Mmap` docs): using the map is undefined
+        // behavior if the underlying file is modified, in or out of process,
+        // while the map is in use.
+        // Not discharged: nothing here stops another process, another thread,
+        // a `log` backend, or `f` from truncating or rewriting the file while
+        // the map is alive. `f` runs caller code: `Database::load_font_file`
+        // passes a parse that logs, and `Database::with_face_data` passes the
+        // caller's closure. The crate docs disclose this under "Memory-mapped
+        // files". The bound `F: FnOnce(&[u8]) -> T` keeps `f` from holding on
+        // to the borrowed bytes, so the map drops when this function returns,
+        // which ends the exposure.
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        // Parsing a face reads a few KiB of tables (`name`, `OS/2`, `post`)
+        // spread over the file, and a font parser handed the data jumps between
+        // tables too. With the default sequential readahead each page fault
+        // pulls a whole readahead window, up to 4 MiB on btrfs, so listing
+        // thousands of installed faces reads gigabytes. The hint only affects
+        // performance, so a failure is logged and ignored.
+        #[cfg(unix)]
+        if let Err(error) = mmap.advise(memmap2::Advice::Random) {
+            log::debug!(
+                "Failed to mark '{}' as random access: {}.",
+                path.display(),
+                error
+            );
+        }
+        mmap
+    };
+    Ok(f(&data))
+}
+
 impl Source {
     fn with_data<P, T>(&self, p: P) -> Option<T>
     where
         P: FnOnce(&[u8]) -> T,
     {
         match &self {
-            #[cfg(all(feature = "fs", not(feature = "memmap")))]
-            Source::File(ref path) => {
-                let data = std::fs::read(path).ok()?;
-
-                Some(p(&data))
-            }
-            #[cfg(all(feature = "fs", feature = "memmap"))]
-            Source::File(ref path) => {
-                let file = std::fs::File::open(path).ok()?;
-                #[expect(
-                    unsafe_code,
-                    reason = "mapping reads only the pages the closure touches; nothing enforces that the file stays unchanged, as the crate docs disclose"
-                )]
-                // SAFETY:
-                // Operation: `MmapOptions::map(&file)`.
-                // Contract (memmap2 0.9, `Mmap` docs): using the map is undefined
-                // behavior if the underlying file is modified, in or out of
-                // process, while the map is in use.
-                // Not discharged: nothing here stops another process, another
-                // thread, a `log` backend, or the caller's closure `p` from
-                // truncating or rewriting the file while `mmap` is alive. The
-                // crate docs disclose this under "Memory-mapped files". The bound
-                // `P: FnOnce(&[u8]) -> T` keeps `p` from holding on to the
-                // borrowed bytes, so `mmap` drops when this arm returns, which
-                // ends the exposure.
-                let mmap = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
-                // Random access, as in `Database::load_font_file`.
-                #[cfg(unix)]
-                if let Err(error) = mmap.advise(memmap2::Advice::Random) {
-                    log::debug!(
-                        "Failed to mark '{}' as random access: {}.",
-                        path.display(),
-                        error
-                    );
-                }
-
-                Some(p(&mmap))
-            }
+            #[cfg(feature = "fs")]
+            Source::File(ref path) => with_file_data(path, p).ok(),
             Source::Binary(ref data) => Some(p(data.as_ref().as_ref())),
             #[cfg(all(feature = "fs", feature = "memmap"))]
             Source::SharedFile(_, ref data) => Some(p(data.as_ref().as_ref())),
