@@ -134,13 +134,19 @@ impl<'a> RawFace<'a> {
         if magic == Magic::FontCollection {
             s.skip::<u32>(); // version
             let number_of_faces = s.read::<u32>().ok_or(FaceParsingError::MalformedFont)?;
-            let offsets = s
-                .read_array32::<Offset32>(number_of_faces)
+            let offsets_len = usize::num_from(number_of_faces)
+                .checked_mul(Offset32::SIZE)
                 .ok_or(FaceParsingError::MalformedFont)?;
-
-            let face_offset = offsets
-                .get(index)
-                .ok_or(FaceParsingError::FaceIndexOutOfBounds)?;
+            let offsets = s
+                .read_bytes(offsets_len)
+                .ok_or(FaceParsingError::MalformedFont)?;
+            if index >= number_of_faces {
+                return Err(FaceParsingError::FaceIndexOutOfBounds);
+            }
+            // `index < number_of_faces`, so the offset lies within `offsets`.
+            let face_offset =
+                Stream::read_at::<Offset32>(offsets, usize::num_from(index) * Offset32::SIZE)
+                    .ok_or(FaceParsingError::MalformedFont)?;
             // Face offset is from the start of the font data,
             // so we have to adjust it to the current parser offset.
             let face_offset = face_offset
@@ -208,6 +214,7 @@ pub fn fonts_in_collection(data: &[u8]) -> Option<u32> {
     s.skip::<u32>(); // version
     s.read::<u32>()
 }
+
 #[cfg(test)]
 mod tests {
     use super::{FaceParsingError, RawFace};

@@ -174,44 +174,6 @@ impl<'a, T: FromData> Iterator for LazyArrayIter16<'a, T> {
     }
 }
 
-/// A slice-like container that converts internal binary data only on access.
-///
-/// This is a low-level, internal structure that should not be used directly.
-#[derive(Clone, Copy)]
-pub struct LazyArray32<'a, T> {
-    data: &'a [u8],
-    data_type: core::marker::PhantomData<T>,
-}
-
-impl<'a, T: FromData> LazyArray32<'a, T> {
-    /// Creates a new `LazyArray`.
-    #[inline]
-    pub fn new(data: &'a [u8]) -> Self {
-        LazyArray32 {
-            data,
-            data_type: core::marker::PhantomData,
-        }
-    }
-
-    /// Returns a value at `index`.
-    #[inline]
-    pub fn get(&self, index: u32) -> Option<T> {
-        if index < self.len() {
-            let start = usize::num_from(index) * T::SIZE;
-            let end = start + T::SIZE;
-            self.data.get(start..end).and_then(T::parse)
-        } else {
-            None
-        }
-    }
-
-    /// Returns array's length.
-    #[inline]
-    pub fn len(&self) -> u32 {
-        (self.data.len() / T::SIZE) as u32
-    }
-}
-
 /// A streaming binary parser.
 #[derive(Clone, Default, Debug)]
 pub struct Stream<'a> {
@@ -300,13 +262,6 @@ impl<'a> Stream<'a> {
     pub fn read_array16<T: FromData>(&mut self, count: u16) -> Option<LazyArray16<'a, T>> {
         let len = usize::from(count) * T::SIZE;
         self.read_bytes(len).map(LazyArray16::new)
-    }
-
-    /// Reads the next `count` types as a slice.
-    #[inline]
-    pub fn read_array32<T: FromData>(&mut self, count: u32) -> Option<LazyArray32<'a, T>> {
-        let len = usize::num_from(count) * T::SIZE;
-        self.read_bytes(len).map(LazyArray32::new)
     }
 }
 
