@@ -208,3 +208,61 @@ pub fn fonts_in_collection(data: &[u8]) -> Option<u32> {
     s.skip::<u32>(); // version
     s.read::<u32>()
 }
+#[cfg(test)]
+mod tests {
+    use super::{FaceParsingError, RawFace};
+
+    /// A face with no tables: the TrueType magic, `numTables = 0` and the
+    /// three search fields.
+    const EMPTY_FACE: [u8; 12] = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    /// A `ttcf` header that declares `declared` faces, then `offsets`.
+    fn collection(declared: u32, offsets: &[u32]) -> Vec<u8> {
+        let mut data = b"ttcf".to_vec();
+        data.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
+        data.extend_from_slice(&declared.to_be_bytes());
+        for offset in offsets {
+            data.extend_from_slice(&offset.to_be_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn parses_each_face_of_a_collection() {
+        // Header (12 bytes) and two offsets (8 bytes), then the two faces.
+        let mut data = collection(2, &[20, 32]);
+        data.extend_from_slice(&EMPTY_FACE);
+        data.extend_from_slice(&EMPTY_FACE);
+        RawFace::parse(&data, 0).unwrap();
+        RawFace::parse(&data, 1).unwrap();
+        assert_eq!(
+            RawFace::parse(&data, 2).err(),
+            Some(FaceParsingError::FaceIndexOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn a_truncated_offset_table_is_malformed_whatever_the_index() {
+        // Two faces declared, but the data ends after the first offset.
+        let data = collection(2, &[16]);
+        for index in [0, 5] {
+            assert_eq!(
+                RawFace::parse(&data, index).err(),
+                Some(FaceParsingError::MalformedFont),
+                "index {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_face_offset_inside_the_offset_table_is_malformed() {
+        // The offset table ends at byte 20, so a face at 16 overlaps it.
+        let mut data = collection(2, &[16, 20]);
+        data.extend_from_slice(&EMPTY_FACE);
+        assert_eq!(
+            RawFace::parse(&data, 0).err(),
+            Some(FaceParsingError::MalformedFont)
+        );
+        RawFace::parse(&data, 1).unwrap();
+    }
+}
