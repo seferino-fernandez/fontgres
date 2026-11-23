@@ -12,6 +12,30 @@ The server loads its fonts once at startup (the system's installed fonts plus
 any configured directories and files) and every tool reads that snapshot.
 Restart it to pick up newly installed fonts.
 
+## Install
+
+Prebuilt binaries for Linux, macOS and Windows (`x86_64` and `aarch64`) are attached
+to each [GitHub Release](https://github.com/seferino-fernandez/fontgres/releases).
+
+With Homebrew (macOS and Linux), which also installs shell completions and man pages:
+
+```shell
+brew tap seferino-fernandez/tools
+brew install fontgres-mcp
+```
+
+With cargo-binstall, which downloads the prebuilt binary:
+
+```shell
+cargo binstall fontgres-mcp
+```
+
+From source with cargo:
+
+```shell
+cargo install fontgres-mcp
+```
+
 ## Transports
 
 - `stdio` for Claude Desktop, Claude Code, and other local MCP clients

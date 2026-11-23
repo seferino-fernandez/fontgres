@@ -23,6 +23,33 @@ queries, configuration and errors live in one place:
      (clap CLI)   (MCP tools)
 ```
 
+## Installation
+
+Prebuilt binaries for Linux, macOS and Windows (`x86_64` and `aarch64`) are attached
+to each [GitHub Release](https://github.com/seferino-fernandez/fontgres/releases).
+
+With Homebrew (macOS and Linux), which also installs shell completions and man pages:
+
+```shell
+brew tap seferino-fernandez/tools
+brew install fontgres
+brew install fontgres-mcp
+```
+
+With cargo-binstall, which downloads the prebuilt binary:
+
+```shell
+cargo binstall fontgres-cli
+cargo binstall fontgres-mcp
+```
+
+From source with cargo:
+
+```shell
+cargo install fontgres-cli
+cargo install fontgres-mcp
+```
+
 ## Quick start
 
 Build the project:
@@ -147,6 +174,10 @@ prek install                           # run the fast checks on each commit
 
 Tombi installs separately (see [its install guide](https://tombi-toml.github.io/tombi/docs/installation)),
 and `just dupes` needs Node.js for `npx`.
+
+## Releasing
+
+Releases are cut by release-plz from `main`; see [docs/releasing.md](docs/releasing.md).
 
 ## License
 
