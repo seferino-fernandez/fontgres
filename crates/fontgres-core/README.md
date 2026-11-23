@@ -56,9 +56,12 @@ the `fontgres_core` target.
 
 ## Safety
 
-Font files are memory-mapped while they are parsed (the `memmap` feature), as
-fontdb does: the only two `unsafe` blocks in the workspace, each with a
-`SAFETY` comment.
+With the `memmap` feature, on by default, font files are memory-mapped while
+they are read. The two calls that map them are the only `unsafe` blocks in the
+workspace. If a mapped file is truncated or rewritten during the call that
+maps it, the behavior is undefined, and the crate does not prevent it; the
+crate docs list the cases under "Memory-mapped files". Build without `memmap`
+to read files into memory instead.
 
 ## License
 
