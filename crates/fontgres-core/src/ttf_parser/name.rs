@@ -49,7 +49,7 @@ fn is_unicode_encoding(platform_id: PlatformId, encoding_id: u16) -> bool {
             encoding_id,
             WINDOWS_SYMBOL_ENCODING_ID | WINDOWS_UNICODE_BMP_ENCODING_ID
         ),
-        _ => false,
+        PlatformId::Macintosh | PlatformId::Iso | PlatformId::Custom => false,
     }
 }
 
@@ -92,11 +92,11 @@ pub(crate) struct Name<'a> {
     /// A [Name ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids).
     ///
     /// A predefined list of ID's can be found in the [`name_id`](name_id/index.html) module.
-    pub name_id: u16,
+    pub id: u16,
     /// A raw name data.
     ///
     /// Can be in any encoding. Can be empty.
-    pub name: &'a [u8],
+    pub data: &'a [u8],
 }
 
 impl Name<'_> {
@@ -139,8 +139,8 @@ impl<'a> Names<'a> {
             platform_id: record.platform_id,
             encoding_id: record.encoding_id,
             language_id: record.language_id,
-            name_id: record.name_id,
-            name,
+            id: record.name_id,
+            data: name,
         })
     }
 
@@ -151,7 +151,7 @@ impl<'a> Names<'a> {
 }
 
 impl core::fmt::Debug for Names<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Names {{ ... }}")
     }
 }
@@ -170,7 +170,7 @@ impl<'a> IntoIterator for Names<'a> {
 }
 
 /// An iterator over face names.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct NamesIter<'a> {
     names: Names<'a>,
     index: u16,

@@ -35,9 +35,9 @@ impl FromData for Magic {
     #[inline]
     fn parse(data: &[u8]) -> Option<Self> {
         match u32::parse(data)? {
-            0x00010000 | 0x74727565 => Some(Magic::TrueType),
-            0x4F54544F => Some(Magic::OpenType),
-            0x74746366 => Some(Magic::FontCollection),
+            0x0001_0000 | 0x7472_7565 => Some(Magic::TrueType),
+            0x4F54_544F => Some(Magic::OpenType),
+            0x7474_6366 => Some(Magic::FontCollection),
             _ => None,
         }
     }
@@ -51,11 +51,8 @@ pub(crate) struct Tag(pub u32);
 impl Tag {
     /// Creates a `Tag` from bytes.
     #[inline]
-    pub(crate) const fn from_bytes(bytes: &[u8; 4]) -> Self {
-        Tag(((bytes[0] as u32) << 24)
-            | ((bytes[1] as u32) << 16)
-            | ((bytes[2] as u32) << 8)
-            | (bytes[3] as u32))
+    pub(crate) const fn from_bytes(bytes: [u8; 4]) -> Self {
+        Tag(u32::from_be_bytes(bytes))
     }
 }
 
@@ -159,9 +156,9 @@ impl<'a> RawFace<'a> {
 
             // Read **face** magic.
             // Each face in a font collection also starts with a magic.
-            let magic = s.read::<Magic>().ok_or(FaceParsingError::UnknownMagic)?;
+            let face_magic = s.read::<Magic>().ok_or(FaceParsingError::UnknownMagic)?;
             // And face in a font collection can't be another collection.
-            if magic == Magic::FontCollection {
+            if face_magic == Magic::FontCollection {
                 return Err(FaceParsingError::UnknownMagic);
             }
         } else {
