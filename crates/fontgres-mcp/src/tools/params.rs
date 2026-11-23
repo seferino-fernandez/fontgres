@@ -21,7 +21,7 @@ pub(super) struct ListFacesParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct QueryFontParams {
-    /// Families in priority order. Names match exactly, case included. The CSS
+    /// Families in priority order. Names match ignoring ASCII case. The CSS
     /// generic names `serif`, `sans-serif`, `cursive`, `fantasy` and
     /// `monospace` resolve through the server's configured generic families.
     #[schemars(length(min = 1))]

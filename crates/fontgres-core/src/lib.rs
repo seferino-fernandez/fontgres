@@ -348,9 +348,22 @@ impl Database {
         // SAFETY: the mapping lives only for this call and the file is not kept
         // open afterwards; a concurrent change to the file during this call is
         // the inherent risk of mmap that upstream fontdb accepts.
-        let data: &[u8] = unsafe { &memmap2::MmapOptions::new().map(&file)? };
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        // Parsing a face reads a few KiB of tables (`name`, `OS/2`, `post`)
+        // spread over the file. With the default sequential readahead each page
+        // fault pulls a whole readahead window, up to 4 MiB on btrfs, so listing
+        // thousands of installed faces reads gigabytes. The hint only affects
+        // performance, so a failure is logged and ignored.
+        #[cfg(unix)]
+        if let Err(error) = mmap.advise(memmap2::Advice::Random) {
+            log::debug!(
+                "Failed to mark '{}' as random access: {}.",
+                path.display(),
+                error
+            );
+        }
 
-        self.load_fonts_from_file(path, data);
+        self.load_fonts_from_file(path, &mmap);
         Ok(())
     }
 
@@ -384,9 +397,10 @@ impl Database {
 
     /// Loads every font file in `dir` and its subdirectories.
     ///
-    /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension (in lower or
-    /// upper case) load. Symbolic links are followed, and a file reached
-    /// through a link that is already in the database is not loaded again.
+    /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension, in any case,
+    /// load. Symbolic links are followed, and a link loads when either its own
+    /// name or its target's has such an extension. A file reached through a
+    /// link that is already in the database is not loaded again.
     ///
     /// Nothing here is an error. A directory that does not exist or cannot be
     /// read adds nothing, silently. A file that cannot be read, and a face that
@@ -455,21 +469,20 @@ impl Database {
         };
 
         for entry in fonts_dir.flatten() {
+            // A link counts when either its own name or its target's has a
+            // font extension: content-addressed stores link font names to
+            // files named by hash.
+            let link_is_font = has_font_extension(&entry.path());
             let (path, file_type) = match self.canonicalize(entry.path(), entry, seen) {
                 Some(v) => v,
                 None => continue,
             };
 
             if file_type.is_file() {
-                match path.extension().and_then(|e| e.to_str()) {
-                    #[rustfmt::skip] // keep extensions match as is
-                    Some("ttf") | Some("ttc") | Some("TTF") | Some("TTC") |
-                    Some("otf") | Some("otc") | Some("OTF") | Some("OTC") => {
-                        if let Err(e) = self.load_font_file(&path) {
-                            log::warn!("Failed to load '{}' cause {}.", path.display(), e);
-                        }
-                    },
-                    _ => {}
+                if link_is_font || has_font_extension(&path) {
+                    if let Err(e) = self.load_font_file(&path) {
+                        log::warn!("Failed to load '{}' cause {}.", path.display(), e);
+                    }
                 }
             } else if file_type.is_dir() {
                 self.load_fonts_dir_impl(&path, seen);
@@ -489,13 +502,15 @@ impl Database {
     /// - macOS and iOS: `/Library/Fonts`, `/System/Library/Fonts`, the
     ///   downloadable fonts under `/System/Library/AssetsV2`,
     ///   `/Network/Library/Fonts` and `~/Library/Fonts`.
-    /// - Other Unix systems except Android: with the `fontconfig` feature, the
-    ///   directories fontconfig's configuration lists, whose generic family
-    ///   aliases also replace this database's generic families. Without the
-    ///   feature, or when the configuration lists no directory,
-    ///   `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.fonts` and
-    ///   `~/.local/share/fonts`.
-    /// - Redox: `/ui/fonts`.
+    /// - Other Unix systems except Android, Redox included: with the `fontconfig` feature, the
+    ///   directories fontconfig's configuration lists. Without the feature, or
+    ///   when the configuration lists no directory, `/usr/share/fonts`,
+    ///   `/usr/local/share/fonts`, `~/.fonts` and `~/.local/share/fonts`.
+    ///   With the feature, once the fonts are loaded, each generic family that
+    ///   fontconfig has an `<alias>` for becomes the first installed family in
+    ///   the order fontconfig tries them (every alias's `prefer` list, then
+    ///   `accept`, then `default`), or the first one tried when none is
+    ///   installed.
     ///
     /// Other platforms load nothing. Errors are handled as in
     /// [`load_fonts_dir`](Database::load_fonts_dir).
@@ -553,13 +568,6 @@ impl Database {
             }
         }
 
-        // Redox OS.
-        #[cfg(target_os = "redox")]
-        {
-            let mut seen = Default::default();
-            self.load_fonts_dir_impl("/ui/fonts".as_ref(), &mut seen);
-        }
-
         // Linux.
         #[cfg(all(
             unix,
@@ -568,10 +576,7 @@ impl Database {
         {
             #[cfg(feature = "fontconfig")]
             {
-                if !self.load_fontconfig() {
-                    log::warn!("Fallback to loading from known font dir paths.");
-                    self.load_no_fontconfig();
-                }
+                self.load_fontconfig();
             }
 
             #[cfg(not(feature = "fontconfig"))]
@@ -605,7 +610,7 @@ impl Database {
         feature = "fontconfig",
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
-    fn load_fontconfig(&mut self) -> bool {
+    fn load_fontconfig(&mut self) {
         use std::path::Path;
 
         let mut fontconfig = fontconfig_parser::FontConfig::default();
@@ -631,56 +636,82 @@ impl Database {
                 None => true,
             };
 
-            if read_global {
-                let _ = fontconfig.merge_config(Path::new("/etc/fonts/local.conf"));
-            }
-            let _ = fontconfig.merge_config(Path::new("/etc/fonts/fonts.conf"));
-        }
-
-        for fontconfig_parser::Alias {
-            alias,
-            default,
-            prefer,
-            accept,
-        } in fontconfig.aliases
-        {
-            let name = prefer
-                .get(0)
-                .or_else(|| accept.get(0))
-                .or_else(|| default.get(0));
-
-            if let Some(name) = name {
-                match alias.to_lowercase().as_str() {
-                    "serif" => self.set_serif_family(name),
-                    "sans-serif" => self.set_sans_serif_family(name),
-                    "sans serif" => self.set_sans_serif_family(name),
-                    "monospace" => self.set_monospace_family(name),
-                    "cursive" => self.set_cursive_family(name),
-                    "fantasy" => self.set_fantasy_family(name),
-                    _ => {}
+            for dir in SYSTEM_FONTCONFIG_DIRS {
+                if read_global {
+                    let _ = fontconfig.merge_config(&Path::new(dir).join("local.conf"));
                 }
+                let _ = fontconfig.merge_config(&Path::new(dir).join("fonts.conf"));
             }
         }
 
         if fontconfig.dirs.is_empty() {
-            return false;
-        }
-
-        let mut seen = Default::default();
-        for dir in fontconfig.dirs {
-            let path = if dir.path.starts_with("~") {
-                if let Ok(ref home) = home {
-                    Path::new(home).join(dir.path.strip_prefix("~").unwrap())
+            log::warn!("Fallback to loading from known font dir paths.");
+            self.load_no_fontconfig();
+        } else {
+            let mut seen = Default::default();
+            for dir in core::mem::take(&mut fontconfig.dirs) {
+                let path = if dir.path.starts_with("~") {
+                    if let Ok(ref home) = home {
+                        Path::new(home).join(dir.path.strip_prefix("~").unwrap())
+                    } else {
+                        continue;
+                    }
                 } else {
-                    continue;
-                }
-            } else {
-                dir.path
-            };
-            self.load_fonts_dir_impl(&path, &mut seen);
+                    dir.path
+                };
+                self.load_fonts_dir_impl(&path, &mut seen);
+            }
         }
 
-        true
+        // Generic families resolve after loading, so each can skip the
+        // families fontconfig prefers that are not installed.
+        self.set_generic_families_from_fontconfig(&fontconfig.aliases);
+    }
+
+    #[cfg(all(
+        unix,
+        feature = "fontconfig",
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    fn set_generic_families_from_fontconfig(&mut self, aliases: &[fontconfig_parser::Alias]) {
+        let aliases: Vec<generic_family::Alias<'_>> = aliases
+            .iter()
+            .map(|alias| generic_family::Alias {
+                family: &alias.alias,
+                prefer: &alias.prefer,
+                accept: &alias.accept,
+                default: &alias.default,
+            })
+            .collect();
+        let [serif, sans_serif, monospace, cursive, fantasy] = [
+            &["serif"][..],
+            &["sans-serif", "sans serif"],
+            &["monospace"],
+            &["cursive"],
+            &["fantasy"],
+        ]
+        .map(|generic| {
+            generic_family::resolve(&aliases, generic, |name| {
+                self.faces.iter().any(|(_, face)| face.has_family(name))
+            })
+            .map(str::to_owned)
+        });
+
+        if let Some(name) = serif {
+            self.family_serif = name;
+        }
+        if let Some(name) = sans_serif {
+            self.family_sans_serif = name;
+        }
+        if let Some(name) = monospace {
+            self.family_monospace = name;
+        }
+        if let Some(name) = cursive {
+            self.family_cursive = name;
+        }
+        if let Some(name) = fantasy {
+            self.family_fantasy = name;
+        }
     }
 
     /// Adds a face described by the caller and returns its new ID.
@@ -769,7 +800,7 @@ impl Database {
     /// carries, under any of its names in any language, decides the result:
     /// among that family's faces the best stretch, then style, then weight is
     /// chosen as the CSS font matching algorithm does. Family names compare
-    /// exactly, so case matters.
+    /// ignoring ASCII case, as [`FaceInfo::has_family`] does.
     ///
     /// # Examples
     ///
@@ -784,7 +815,7 @@ impl Database {
     /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     ///
     /// let families = [Family::Name("tuffy")];
-    /// assert_eq!(db.query(&Query { families: &families, ..Query::default() }), None);
+    /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn query(&self, query: &Query) -> Option<ID> {
@@ -793,7 +824,7 @@ impl Database {
             let candidates: Vec<_> = self
                 .faces
                 .iter()
-                .filter(|(_, face)| face.families.iter().any(|family| family.0 == name))
+                .filter(|(_, face)| face.has_family(name))
                 .map(|(_, info)| info)
                 .collect();
 
@@ -938,6 +969,10 @@ pub struct FaceInfo {
     /// The face's PostScript name.
     ///
     /// Corresponds to a *PostScript name* (6) [name ID] in a TrueType font.
+    /// A font without one gets a name made from its first family, as
+    /// fontconfig makes it: spaces and the other characters PostScript forbids
+    /// in a name become `-`, so *DEC Terminal Modern* gives
+    /// `DEC-Terminal-Modern`.
     ///
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub post_script_name: String,
@@ -959,6 +994,33 @@ pub struct FaceInfo {
     /// Whether the face's `post` table declares it monospaced; `false` when it
     /// has none.
     pub monospaced: bool,
+}
+
+impl FaceInfo {
+    /// Returns whether `name` is one of the face's
+    /// [`families`](FaceInfo::families), ignoring ASCII case.
+    ///
+    /// Letters outside ASCII must match in case as well, although CSS compares
+    /// family names with Unicode caseless matching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fontgres_core::Database;
+    ///
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// db.load_font_data(std::fs::read(path)?);
+    /// let face = db.faces().next().expect("Tuffy is loaded");
+    /// assert!(face.has_family("TUFFY"));
+    /// assert!(!face.has_family("Tuffy Sans"));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn has_family(&self, name: &str) -> bool {
+        self.families
+            .iter()
+            .any(|(family, _)| family.eq_ignore_ascii_case(name))
+    }
 }
 
 /// Holds or locates the data of a whole font, which may contain several faces.
@@ -999,6 +1061,42 @@ impl core::fmt::Debug for Source {
     }
 }
 
+/// The directories holding the system-wide fontconfig configuration,
+/// `fonts.conf` and `local.conf`. On FreeBSD and DragonFly, fontconfig
+/// installed from ports reads its configuration from `/usr/local/etc/fonts`.
+#[cfg(all(
+    feature = "fontconfig",
+    any(target_os = "freebsd", target_os = "dragonfly")
+))]
+const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts", "/usr/local/etc/fonts"];
+/// The directory holding the system-wide fontconfig configuration,
+/// `fonts.conf` and `local.conf`.
+#[cfg(all(
+    unix,
+    feature = "fontconfig",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "dragonfly"
+    ))
+))]
+const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts"];
+
+/// Whether `path` ends in a font extension, `ttf`, `ttc`, `otf` or `otc`, in
+/// any case.
+#[cfg(feature = "fs")]
+fn has_font_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["ttf", "ttc", "otf", "otc"]
+                .iter()
+                .any(|font| extension.eq_ignore_ascii_case(font))
+        })
+}
+
 impl Source {
     fn with_data<P, T>(&self, p: P) -> Option<T>
     where
@@ -1021,9 +1119,18 @@ impl Source {
                 // SAFETY: the mapping lives only for this closure call and the file
                 // is not kept open afterwards; a concurrent change to the file during
                 // the call is the inherent risk of mmap that upstream fontdb accepts.
-                let data = unsafe { &memmap2::MmapOptions::new().map(&file).ok()? };
+                let mmap = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
+                // Random access, as in `Database::load_font_file`.
+                #[cfg(unix)]
+                if let Err(error) = mmap.advise(memmap2::Advice::Random) {
+                    log::debug!(
+                        "Failed to mark '{}' as random access: {}.",
+                        path.display(),
+                        error
+                    );
+                }
 
-                Some(p(data))
+                Some(p(&mmap))
             }
             Source::Binary(ref data) => Some(p(data.as_ref().as_ref())),
             #[cfg(all(feature = "fs", feature = "memmap"))]
@@ -1201,13 +1308,16 @@ fn parse_names(raw_face: &ttf_parser::RawFace) -> Option<(Vec<(String, Language)
         return None;
     }
 
+    // A font without a PostScript name still loads, with one made from its
+    // family as fontconfig makes it.
     let post_script_name = name_table
         .names
         .into_iter()
         .find(|name| {
             name.name_id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
         })
-        .and_then(|name| name_to_unicode(&name))?;
+        .and_then(|name| name_to_unicode(&name))
+        .unwrap_or_else(|| postscript_name::from_family(&families[0].0));
 
     Some((families, post_script_name))
 }
@@ -1501,6 +1611,17 @@ const MAC_ROMAN: &[u16; 256] = &[
 
 // fontgres additions: configuration and CLI helpers shared by the workspace
 // binaries. They need `std`, so they sit behind the `cli` feature.
+
+#[cfg(any(
+    test,
+    all(
+        unix,
+        feature = "fontconfig",
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    )
+))]
+mod generic_family;
+mod postscript_name;
 
 #[cfg(feature = "cli")]
 pub mod cli;

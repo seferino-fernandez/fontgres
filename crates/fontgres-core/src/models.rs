@@ -189,7 +189,7 @@ impl FontQuery {
     /// when no listed family is in the database.
     ///
     /// Matching follows [`Database::query`], so a family name other than a
-    /// generic one must match the font's family name exactly, case included.
+    /// generic one matches the font's family name ignoring ASCII case.
     ///
     /// # Examples
     ///
@@ -241,13 +241,7 @@ fn family(name: &str) -> Family<'_> {
 pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
     let mut faces: Vec<Face> = database
         .faces()
-        .filter(|info| {
-            family.is_none_or(|wanted| {
-                info.families
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(wanted))
-            })
-        })
+        .filter(|info| family.is_none_or(|wanted| info.has_family(wanted)))
         .map(Face::from)
         .collect();
     faces.sort_by(|a, b| {
