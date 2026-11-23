@@ -354,24 +354,26 @@ mod budget_tests {
         assert!(text.contains("ok"));
     }
 
-    #[test]
-    fn replaces_oversized_results() {
-        let big = "x".repeat(2048);
-        let original = CallToolResult::success(vec![ContentBlock::text(big)]);
+    /// Guards `original` with a 256-byte budget, asserts that the result fits
+    /// and reports `response_too_large`, and returns it.
+    fn guard_oversized(original: CallToolResult) -> CallToolResult {
         let guarded = enforce_response_budget(original, 256).unwrap();
         assert!(serde_json::to_vec(&guarded).unwrap().len() <= 256);
         let text = serde_json::to_string(&guarded.content).unwrap();
         assert!(text.contains("response_too_large"), "got: {text}");
+        guarded
+    }
+
+    #[test]
+    fn replaces_oversized_results() {
+        let big = "x".repeat(2048);
+        guard_oversized(CallToolResult::success(vec![ContentBlock::text(big)]));
     }
 
     #[test]
     fn guards_oversized_structured_results() {
         let big = serde_json::json!({ "blob": "x".repeat(2048) });
-        let original = CallToolResult::structured(big);
-        let guarded = enforce_response_budget(original, 256).unwrap();
-        assert!(serde_json::to_vec(&guarded).unwrap().len() <= 256);
-        let text = serde_json::to_string(&guarded.content).unwrap();
-        assert!(text.contains("response_too_large"), "got: {text}");
+        let guarded = guard_oversized(CallToolResult::structured(big));
         assert_eq!(
             guarded.is_error,
             Some(false),
