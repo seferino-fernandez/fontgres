@@ -416,9 +416,29 @@ mod tests {
     }
 
     #[test]
+    fn the_same_dir_given_twice_loads_its_fonts_once() {
+        let once = FontsConfig {
+            system: false,
+            dirs: vec![fonts_dir()],
+            ..FontsConfig::default()
+        };
+        let twice = FontsConfig {
+            dirs: vec![fonts_dir(), fonts_dir()],
+            ..once.clone()
+        };
+        assert_eq!(
+            twice.build_database().unwrap().len(),
+            once.build_database().unwrap().len()
+        );
+    }
+
+    #[test]
     fn duplicate_families_are_listed_once() {
+        let copies = tempfile::tempdir().unwrap();
+        let copy = copies.path().join("Tuffy.ttf");
+        std::fs::copy(fonts_dir().join("Tuffy.ttf"), &copy).unwrap();
         let mut config = tuffy_only();
-        config.files.push(fonts_dir().join("Tuffy.ttf"));
+        config.files.push(copy);
         let database = config.build_database().unwrap();
         assert_eq!(database.len(), 2);
         assert_eq!(family_names(&database), ["Tuffy"]);
