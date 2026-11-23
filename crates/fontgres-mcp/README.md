@@ -1,21 +1,26 @@
 # fontgres-mcp
 
-MCP server exposing the FONTGRES API as tools for LLM clients.
-
-Built on [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.x and [fontgres-core](../fontgres-core/).
+MCP server that answers questions about the fonts on a machine, built on
+[rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.x and
+[fontgres-core](../fontgres-core/), a fork of
+[fontdb](https://github.com/RazrFalcon/fontdb).
 
 Implements the MCP [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)
 specification, and negotiates down to every earlier version `rmcp` supports.
 
+The server loads its fonts once at startup (the system's installed fonts plus
+any configured directories and files) and every tool reads that snapshot.
+Restart it to pick up newly installed fonts.
+
 ## Transports
 
 - `stdio` for Claude Desktop, Claude Code, and other local MCP clients
-## Quick start
 
-stdio transport:
+## Quick start
 
 ```bash
 fontgres-mcp --transport stdio
+fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 ```
 
 ## Logging verbosity
@@ -27,57 +32,38 @@ fontgres-mcp --transport stdio
 
 So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
-configured level prints a warning and falls back to `info`.
+configured level prints a warning and falls back to `info`. Logs go to stderr,
+including fontdb's warnings about files it cannot parse.
 
-## Example tools
+## Tools
 
 Every tool name carries the `fontgres_` prefix, so a client running several MCP
 servers can tell this one's tools apart.
 
-| Tool                      | Description                                  | Read-only |
-| ------------------------- | -------------------------------------------- | --------- |
-| `fontgres_get_system_status` | Server health/status                         | Yes |
-| `fontgres_list_items`        | List items (paginated: `page`, `page_size`)  | Yes |
-| `fontgres_get_item`          | Fetch one item by `id`                       | Yes |
-| `fontgres_create_item`       | Create an item (`name`, `enabled`)           | No |
-| `fontgres_delete_item`       | Delete an item by `id` (destructive)         | No |
+| Tool                     | Description                                                        | Read-only |
+| ------------------------ | ------------------------------------------------------------------ | --------- |
+| `fontgres_list_faces`    | List the loaded faces; `family` narrows to one family              | Yes |
+| `fontgres_list_families` | List the distinct family names                                     | Yes |
+| `fontgres_query_font`    | Best face for `families`, `weight`, `style`, `stretch` (CSS-like) | Yes |
+
+Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1–1000),
+`style` (`normal`, `italic`, `oblique`), `stretch` (`ultra-condensed` …
+`ultra-expanded`), `monospaced`, `path` and `index`. Family names in a query
+match exactly, case included; the generic names `serif`, `sans-serif`,
+`cursive`, `fantasy` and `monospace` resolve through `[fonts.generic]`.
 
 ### Tool calls
 
 Every call goes through the same checks, in order:
 
 1. **Arguments.** An argument the tool's input schema does not declare is
-   refused, without contacting the upstream API. Every params struct also
-   denies unknown fields.
-1. **Confirmation.** A tool annotated `destructiveHint: true`, called by a
-   client that negotiated 2026-07-28 and supports form elicitation, first
-   answers an input-required result asking the user to confirm. Its
-   arguments are decoded first, so a mistyped one fails before the user is
-   asked. The pending call is sealed into its `requestState` (valid for 5
-   minutes, bound to the tool name, keyed per process). The retry must carry
-   the same arguments and an accepted `confirm: true`; changed arguments, a
-   decline or a cancel are refused. An accepted state is single-use: a
-   replay is refused. The server remembers up to 4096 spent states; past
-   that it forgets the oldest early, so under that much confirmation traffic
-   a spent state could be replayed, but only within its 5 minutes. Clients without form elicitation, or on an older protocol, run the
-   tool directly. Turn the prompt off with `[mcp] confirm_destructive = false`
-   or `FONTGRES_MCP_CONFIRM_DESTRUCTIVE=false`. This is a courtesy against a
-   model acting alone, not access control.
+   refused. Every params struct also denies unknown fields.
 1. **Response budget.** The whole serialized result, `content` and
    `structuredContent` together, is capped at `max_response_bytes` (default
    1 MiB). A larger result is replaced by a small `response_too_large` error;
-   if even that cannot fit, the call fails with a protocol error.
-
-Every result is `Json<Redacted<T>>`, built by `ApiClient::redact`, and the
-output schema stays `T`'s. It masks the credential forms listed in the
-[`fontgres-core` README](../fontgres-core/README.md#redaction) (string values
-under sensitive keys, secret pairs, query values and path segments, URL user
-information, `Authorization` and `Cookie` header values, JSON embedded in
-strings, object keys) and the configured API key itself. Redaction is
-pattern-based and never changes a value's type, so a secret in a shape it
-does not recognize, or stored as a number, reaches the model. A failing call answers a tool error holding only the core error's
-public message (a 404 adds a hint to use the list tool), never the upstream
-body, the request URL, or decoder detail.
+   if even that cannot fit, the call fails with a protocol error. Listing every
+   face on a machine with many fonts can exceed the default; narrow it with
+   `family` or raise the cap.
 
 ## Shell completions
 
@@ -119,17 +105,17 @@ A file named by `--config` or `FONTGRES_CONFIG` must exist; the default may be
 absent.
 
 Each setting comes from the highest layer that sets it: CLI flag, then
-`FONTGRES_*` env, then `FONTGRES_*_FILE` env, then `config.toml`. A secret's lower
-layers are never read. A value that does not parse fails at startup naming its
-source: an env var by name and raw value, a TOML key by file, line and
-column (the offending line is never echoed, since it may hold a secret).
+`FONTGRES_*` env, then `config.toml`. A list (font directories or files) is
+taken whole from that layer. A value that does not parse fails at startup
+naming its source: an env var by name and raw value, a TOML key by file, line
+and column.
 
-| Variable | Description |
-| --- | --- |
-| `FONTGRES_BASE_URL`                    | Upstream API base URL                                |
-| `FONTGRES_API_KEY`                     | API key sent as `X-Api-Key`                          |
-| `FONTGRES_MCP_CONFIRM_DESTRUCTIVE`     | Confirm destructive tools (default: `true`)          |
-| `FONTGRES_MCP_MAX_RESPONSE_BYTES`      | Tool result size cap in bytes (default: 1 MiB)       |
-
+| Flag / Variable                                      | Description                                        |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| `--no-system-fonts` / `FONTGRES_FONTS_SYSTEM`        | Load the system's installed fonts (default: `true`) |
+| `--font-dir` / `FONTGRES_FONTS_DIRS`                 | Extra directories, scanned recursively             |
+| `--font-file` / `FONTGRES_FONTS_FILES`               | Extra font files                                   |
+| `FONTGRES_FONTS_GENERIC_SERIF` (and `_SANS_SERIF`, …) | Family a CSS generic name resolves to              |
+| `FONTGRES_MCP_MAX_RESPONSE_BYTES`                    | Tool result size cap in bytes (default: 1 MiB)     |
 
 See [config.toml.example](../../config.toml.example) for all available fields.

@@ -19,10 +19,6 @@ pub(crate) struct Listed<T> {
 
 impl<T> Listed<T> {
     /// Wraps a list, recording its length as `count`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the font list tools arrive in a later commit")
-    )]
     pub(super) fn new(items: Vec<T>) -> Self {
         Self {
             count: items.len(),

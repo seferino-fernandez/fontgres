@@ -1,18 +1,15 @@
-# FONTGRES MCP Server
+# fontgres MCP Server
 
-This server exposes the FONTGRES API as tools.
+This server answers questions about the fonts it loaded at startup: the
+system's installed fonts and any configured font directories and files.
 
-- `fontgres_get_system_status`: server health.
-- `fontgres_list_items`: list items (paginated: `page`, `page_size`).
-- `fontgres_get_item`: fetch one item by `id`.
-- `fontgres_create_item`: create an item (`name`, `enabled`).
-- `fontgres_delete_item`: delete an item by `id`. Destructive and cannot be undone.
+- `fontgres_list_faces`: list every face (family, PostScript name, weight,
+  style, stretch, monospaced, file path); `family` narrows it to one family.
+- `fontgres_list_families`: list the distinct family names.
+- `fontgres_query_font`: find the face that best matches `families` (in
+  priority order; CSS generic names such as `sans-serif` work), `weight`
+  (1–1000), `style` and `stretch`, as CSS font matching does.
 
-Every tool rejects an argument it does not declare, so send only the listed
-arguments.
-
-Destructive tools may ask for confirmation through MCP form elicitation. Retry
-the call with the same arguments, the returned request state and the user's
-answer. This confirmation is a best-effort courtesy, not access control.
-
-Replace these example tools with your API's operations.
+Family names in a query match exactly, case included, so look names up with
+the family list first. Every tool is read-only and rejects an argument it does
+not declare, so send only the listed arguments.

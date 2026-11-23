@@ -174,6 +174,173 @@ mod tests {
 }
 
 #[cfg(test)]
+mod router_tests {
+    use super::close_object_schemas;
+    use crate::tools::test_support::tools;
+    use rmcp::ServerHandler;
+    use rmcp::model::Tool;
+    use serde_json::Value;
+
+    /// Every registered tool, from a handler that is never called.
+    fn listed_tools() -> Vec<Tool> {
+        tools().router().list_all()
+    }
+
+    #[test]
+    fn every_listed_tool_schema_is_closed() {
+        for tool in listed_tools() {
+            let mut v = Value::Object((*tool.input_schema).clone());
+            close_object_schemas(&mut v); // idempotent; asserts no panic
+            assert_eq!(
+                v["additionalProperties"],
+                Value::Bool(false),
+                "tool {} root schema must be closed",
+                tool.name
+            );
+            // Every advertised tool's root schema must declare `required`
+            // explicitly (either `[]` for all-optional/no-arg tools or a
+            // populated array), so deterministic scanners don't flag a missing
+            // `required` key.
+            let required = v.get("required").unwrap_or_else(|| {
+                panic!("tool {} root schema must declare `required`", tool.name)
+            });
+            assert!(
+                required.is_array(),
+                "tool {} root `required` must be an array, got {required}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_listed_tool_has_a_closeable_output_schema() {
+        // Every tool returns `Json<T>`, so rmcp advertises an `outputSchema`.
+        // The MCP spec requires an object root, and closing must produce at
+        // least one `additionalProperties: false`.
+        for tool in listed_tools() {
+            let output = tool
+                .output_schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool {} must advertise an output schema", tool.name));
+            let mut v = Value::Object((**output).clone());
+            assert!(
+                v.get("type").and_then(Value::as_str) == Some("object")
+                    || v.get("properties").is_some(),
+                "tool {} output schema must have an object root: {v}",
+                tool.name
+            );
+            close_object_schemas(&mut v); // idempotent; asserts no panic
+            let serialized = v.to_string();
+            assert!(
+                serialized.contains("\"additionalProperties\":false"),
+                "tool {} output schema must have its object node(s) closed: {serialized}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn list_output_schemas_require_items_and_count() {
+        use serde_json::json;
+
+        for name in ["fontgres_list_faces", "fontgres_list_families"] {
+            let tool = listed_tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap();
+            let schema = tool.output_schema.unwrap();
+            let required = schema["required"].as_array().unwrap();
+            assert_eq!(required.len(), 2, "{name}");
+            assert!(required.contains(&json!("items")), "{name}");
+            assert!(required.contains(&json!("count")), "{name}");
+            assert_eq!(schema["additionalProperties"], false, "{name}");
+        }
+    }
+
+    /// Every tool, in listing order, with the annotation hints it must carry:
+    /// read-only, destructive (left unchecked when `None`) and idempotent.
+    const EXPECTED_HINTS: [(&str, bool, Option<bool>, bool); 3] = [
+        ("fontgres_list_faces", true, Some(false), true),
+        ("fontgres_list_families", true, Some(false), true),
+        ("fontgres_query_font", true, Some(false), true),
+    ];
+
+    #[test]
+    fn tool_annotations_are_complete() {
+        let tools = listed_tools();
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
+        let expected: Vec<&str> = EXPECTED_HINTS.iter().map(|(name, ..)| *name).collect();
+        assert_eq!(names, expected);
+        for (tool, (_, read_only, destructive, idempotent)) in tools.iter().zip(EXPECTED_HINTS) {
+            assert!(
+                tool.name.starts_with("fontgres_"),
+                "tool {} must carry the server prefix",
+                tool.name
+            );
+            let ann = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool {} must have annotations", tool.name));
+            assert!(
+                ann.title.as_ref().is_some_and(|t| !t.is_empty()),
+                "tool {} must have a non-empty title",
+                tool.name
+            );
+            assert_eq!(
+                ann.read_only_hint,
+                Some(read_only),
+                "{} read-only hint",
+                tool.name
+            );
+            if destructive.is_some() {
+                assert_eq!(
+                    ann.destructive_hint, destructive,
+                    "{} destructive hint",
+                    tool.name
+                );
+            }
+            assert_eq!(
+                ann.idempotent_hint,
+                Some(idempotent),
+                "{} idempotent hint",
+                tool.name
+            );
+        }
+    }
+
+    /// Pins the advertised protocol version. `ProtocolVersion::LATEST` follows
+    /// the SDK and may move past what this server implements, so this server
+    /// names its version explicitly.
+    #[test]
+    fn advertises_current_protocol_version() {
+        use rmcp::model::ProtocolVersion;
+
+        let tools = tools();
+        assert_eq!(
+            tools.get_info().protocol_version,
+            ProtocolVersion::V_2026_07_28
+        );
+    }
+
+    /// The server must identify itself, not the SDK. `Implementation::default()`
+    /// and `from_build_env()` both expand `env!` inside rmcp, so they report
+    /// `"rmcp"` at rmcp's version which would tell clients this server is
+    /// version 3.0.0. Guards against a well-meaning revert to either.
+    #[test]
+    fn identifies_itself_rather_than_the_sdk() {
+        let tools = tools();
+        let server_info = tools.get_info().server_info;
+
+        assert_eq!(server_info.name, env!("CARGO_PKG_NAME"));
+        assert_eq!(server_info.version, env!("CARGO_PKG_VERSION"));
+        assert_ne!(
+            server_info.name, "rmcp",
+            "server_info must not report the SDK's identity"
+        );
+    }
+}
+
+#[cfg(test)]
 mod budget_tests {
     use super::enforce_response_budget;
     use rmcp::model::{CallToolResult, ContentBlock};

@@ -16,7 +16,7 @@ const STARTUP_LINE: &str = "fontgres-mcp starting";
 fn startup_stderr(toml: &str, configure: impl FnOnce(&mut Command)) -> String {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.toml");
-    std::fs::write(&config, toml).unwrap();
+    std::fs::write(&config, format!("[fonts]\nsystem = false\n{toml}")).unwrap();
     let mut command = Command::cargo_bin("fontgres-mcp").unwrap();
     command
         .env_clear()
