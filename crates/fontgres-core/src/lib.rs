@@ -1429,14 +1429,14 @@ impl NameExt for ttf_parser::name::Name<'_> {
     }
 }
 
+// Based on https://github.com/servo/font-kit
 /// Returns the face CSS font matching picks from one family's `candidates`,
 /// or `None` when there are none.
 ///
 /// Implements step 4 of
-/// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>,
-/// based on <https://github.com/servo/font-kit>. Step 4d (`font-size`) does
-/// not apply. Of the faces left equal after the steps, the first in
-/// `candidates` wins.
+/// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>.
+/// Step 4d (`font-size`) does not apply. Of the faces left equal after the
+/// steps, the first in `candidates` wins.
 #[inline(never)]
 fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option<&'a FaceInfo> {
     let mut matching_set = candidates.to_vec();
