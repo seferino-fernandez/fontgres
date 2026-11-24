@@ -1,26 +1,33 @@
-//! Environment variable source abstraction used by the config loader.
+//! The source of environment variables that font discovery and the config
+//! loader read through.
 //!
 //! Splitting the "where does an env var come from?" question behind a trait
 //! lets production code read from the process environment while tests pass
-//! an in-memory [`MapEnv`]. The config module never calls
-//! `std::env::var` directly; every env read goes through an
+//! an in-memory [`MapEnv`]. Neither the system font rules nor the config
+//! module calls `std::env::var` directly; every env read goes through an
 //! [`&impl Env`](crate::env::Env).
 //!
-//! [`env_non_empty`] treats an empty string as
-//! unset. The typed parsers [`env_parse`] and
-//! [`env_parse_bool`] trim the value first, treat
-//! an empty or whitespace-only value as unset, and fail with
-//! [`ConfigError::InvalidEnvValue`] naming the variable and its raw value when
-//! the value does not parse, so a typo never silently falls back to a lower
-//! layer.
+//! [`env_non_empty`] treats an empty string as unset.
+#![cfg_attr(
+    feature = "cli",
+    doc = "\nThe typed parsers [`env_parse`] and [`env_parse_bool`], which need the \
+`cli` feature, trim the value first, treat an empty or whitespace-only value \
+as unset, and fail with [`ConfigError::InvalidEnvValue`] naming the variable \
+and its raw value when the value does not parse, so a typo never silently \
+falls back to a lower layer."
+)]
 
+#[cfg(feature = "cli")]
 use crate::Result;
+#[cfg(feature = "cli")]
 use crate::error::ConfigError;
 use std::collections::HashMap;
+#[cfg(feature = "cli")]
 use std::fmt::Display;
+#[cfg(feature = "cli")]
 use std::str::FromStr;
 
-/// Source of configuration environment variables.
+/// Source of environment variables.
 ///
 /// The production impl ([`SystemEnv`]) reads from the real process
 /// environment. Test fakes ([`MapEnv`]) hold an in-memory map.
@@ -114,6 +121,7 @@ pub fn env_non_empty(env: &impl Env, key: &str) -> Option<String> {
 /// let err = env_parse::<u64>(&env, "INVALID").unwrap_err();
 /// assert!(err.to_string().contains(r#"invalid INVALID value "soon""#));
 /// ```
+#[cfg(feature = "cli")]
 pub fn env_parse<T>(env: &impl Env, key: &str) -> Result<Option<T>>
 where
     T: FromStr,
@@ -154,6 +162,7 @@ where
 /// let err = env_parse_bool(&env, "TYPO").unwrap_err();
 /// assert!(err.to_string().contains(r#"invalid TYPO value "flase""#));
 /// ```
+#[cfg(feature = "cli")]
 pub fn env_parse_bool(env: &impl Env, key: &str) -> Result<Option<bool>> {
     parse_trimmed(env, key, |value| {
         match value.to_ascii_lowercase().as_str() {
@@ -165,6 +174,7 @@ pub fn env_parse_bool(env: &impl Env, key: &str) -> Result<Option<bool>> {
 }
 
 /// Applies `parse` to the trimmed value of `key`, treating blank as unset.
+#[cfg(feature = "cli")]
 fn parse_trimmed<T>(
     env: &impl Env,
     key: &str,
@@ -187,7 +197,7 @@ fn parse_trimmed<T>(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cli"))]
 mod tests {
     use super::*;
 

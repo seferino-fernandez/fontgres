@@ -29,6 +29,9 @@ The one name a family is listed under: the English (United States) name when the
 **Generic family**:
 One of the CSS names serif, sans-serif, cursive, fantasy and monospace, each standing for one family chosen per database.
 
+**System fonts**:
+The fonts a platform installs or lets its users install, found in the directories that platform's rules name.
+
 **Load order**:
 The order in which faces entered a database. Within a directory it follows file names, and within a collection it follows the faces' positions in the file.
 _Avoid_: Insertion order, iteration order
