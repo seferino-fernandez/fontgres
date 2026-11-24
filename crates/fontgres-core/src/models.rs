@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::FontsConfig;
-use crate::{Database, FaceInfo, Family, FontLoadReport, Query, Source, Stretch, Style, Weight};
+use crate::{
+    Database, FaceInfo, Family, FontLoadReport, GenericFamily, Query, Source, Stretch, Style,
+    Weight,
+};
 
 /// One font face, as the `fontgres` binaries print and serialize it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -220,14 +223,7 @@ impl FontQuery {
 /// Reads `name` as a CSS generic family when it is one (in any case), and as
 /// a family name otherwise.
 fn family(name: &str) -> Family<'_> {
-    match name.to_ascii_lowercase().as_str() {
-        "serif" => Family::Serif,
-        "sans-serif" => Family::SansSerif,
-        "cursive" => Family::Cursive,
-        "fantasy" => Family::Fantasy,
-        "monospace" => Family::Monospace,
-        _ => Family::Name(name),
-    }
+    GenericFamily::from_css_name(name).map_or(Family::Name(name), Family::Generic)
 }
 
 /// Returns the faces in `database`, sorted by family, then weight, style,
@@ -320,21 +316,10 @@ impl FontsConfig {
             }
             warn_of_failures(&report);
         }
-        let generic = &self.generic;
-        if let Some(family) = &generic.serif {
-            database.set_serif_family(family.as_str());
-        }
-        if let Some(family) = &generic.sans_serif {
-            database.set_sans_serif_family(family.as_str());
-        }
-        if let Some(family) = &generic.cursive {
-            database.set_cursive_family(family.as_str());
-        }
-        if let Some(family) = &generic.fantasy {
-            database.set_fantasy_family(family.as_str());
-        }
-        if let Some(family) = &generic.monospace {
-            database.set_monospace_family(family.as_str());
+        for generic in GenericFamily::ALL {
+            if let Some(family) = self.generic.get(generic) {
+                database.set_generic_family(generic, family.as_str());
+            }
         }
         Ok(database)
     }
@@ -343,7 +328,7 @@ impl FontsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::GenericFamilies;
+    use crate::GenericFamilies;
 
     fn fonts_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

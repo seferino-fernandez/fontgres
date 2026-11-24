@@ -272,7 +272,7 @@ mod tests {
 
     use super::{SystemFonts, apple, fontconfig, unix, windows};
     use crate::env::MapEnv;
-    use crate::{Database, Family, Source};
+    use crate::{Database, Family, GenericFamily, Source};
 
     /// A temporary directory laid out as a machine: the root the rules read
     /// under at `root`, and beside it the user's directories and the font
@@ -607,11 +607,12 @@ mod tests {
 
         assert_eq!(report.added().len(), 1);
         assert_eq!(database.len(), 1);
-        assert_eq!(database.family_name(&Family::Serif), "Tuffy");
+        let family_name = |generic| database.family_name(&Family::Generic(generic)).to_owned();
+        assert_eq!(family_name(GenericFamily::Serif), "Tuffy");
         // Without an installed preference, the family is the first one fontconfig tries.
-        assert_eq!(database.family_name(&Family::Monospace), "Missing Mono");
+        assert_eq!(family_name(GenericFamily::Monospace), "Missing Mono");
         // A generic family without an alias keeps its default.
-        assert_eq!(database.family_name(&Family::Cursive), "Comic Sans MS");
+        assert_eq!(family_name(GenericFamily::Cursive), "Comic Sans MS");
     }
 
     #[test]

@@ -27,7 +27,7 @@
 //! # Quick start
 //!
 //! ```
-//! use fontgres_core::{Database, Family, Query, Weight};
+//! use fontgres_core::{Database, Family, GenericFamily, Query, Weight};
 //!
 //! # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
 //! let mut db = Database::new();
@@ -35,7 +35,10 @@
 //! assert!(report.failures().is_empty());
 //!
 //! let query = Query {
-//!     families: &[Family::Name("Tuffy"), Family::SansSerif],
+//!     families: &[
+//!         Family::Name("Tuffy"),
+//!         Family::Generic(GenericFamily::SansSerif),
+//!     ],
 //!     weight: Weight::BOLD,
 //!     ..Query::default()
 //! };
@@ -113,11 +116,9 @@ extern crate alloc;
 mod ttf_parser;
 
 #[cfg(not(feature = "std"))]
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 
+pub use generic_family::{GenericFamilies, GenericFamily};
 pub use ttf_parser::Language;
 pub use ttf_parser::Width as Stretch;
 
@@ -326,8 +327,8 @@ impl core::fmt::Display for FontLoadFailureReason {
 ///
 /// Faces are added by the `load_*` methods or [`push_face_info`], and read
 /// back with [`face`], [`faces`], [`family_faces`] and [`query`]. The
-/// database also holds the family each CSS generic family ([`Family::Serif`]
-/// and the others) resolves to.
+/// database also holds the family each CSS generic family
+/// ([`GenericFamily`]) resolves to.
 ///
 /// # Load order
 ///
@@ -376,11 +377,7 @@ impl core::fmt::Display for FontLoadFailureReason {
 pub struct Database {
     /// Every face, in load order; a face's [`ID`] is its index here.
     faces: Vec<FaceInfo>,
-    family_serif: String,
-    family_sans_serif: String,
-    family_cursive: String,
-    family_fantasy: String,
-    family_monospace: String,
+    generic_families: GenericFamilies<String>,
     /// The canonical path of every font file a file-system load reached,
     /// with whether the file gave a face. [`Database::load_font_file`]
     /// leaves out a file it could not read.
@@ -408,14 +405,10 @@ impl Database {
     pub fn new() -> Self {
         Database {
             faces: Vec::new(),
-            family_serif: "Times New Roman".to_string(),
-            family_sans_serif: "Arial".to_string(),
-            family_cursive: "Comic Sans MS".to_string(),
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            family_fantasy: "Impact".to_string(),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            family_fantasy: "Papyrus".to_string(),
-            family_monospace: "Courier New".to_string(),
+            generic_families: GenericFamilies::defaults(cfg!(any(
+                target_os = "macos",
+                target_os = "ios"
+            ))),
             #[cfg(feature = "fs")]
             loaded_files: std::collections::HashMap::new(),
         }
@@ -683,34 +676,14 @@ impl Database {
     /// when none is installed.
     #[cfg(feature = "fs")]
     fn set_generic_families(&mut self, aliases: &[generic_family::Alias]) {
-        let [serif, sans_serif, monospace, cursive, fantasy] = [
-            &["serif"][..],
-            &["sans-serif", "sans serif"],
-            &["monospace"],
-            &["cursive"],
-            &["fantasy"],
-        ]
-        .map(|generic| {
-            generic_family::resolve(aliases, generic, |name| {
+        for generic in GenericFamily::ALL {
+            let resolved = generic_family::resolve(aliases, generic, |name| {
                 self.family_faces(name).next().is_some()
             })
-            .map(str::to_owned)
-        });
-
-        if let Some(name) = serif {
-            self.family_serif = name;
-        }
-        if let Some(name) = sans_serif {
-            self.family_sans_serif = name;
-        }
-        if let Some(name) = monospace {
-            self.family_monospace = name;
-        }
-        if let Some(name) = cursive {
-            self.family_cursive = name;
-        }
-        if let Some(name) = fantasy {
-            self.family_fantasy = name;
+            .map(str::to_owned);
+            if let Some(family) = resolved {
+                self.set_generic_family(generic, family);
+            }
         }
     }
 
@@ -744,45 +717,31 @@ impl Database {
         self.faces.len()
     }
 
-    /// Sets the family that [`Family::Serif`] resolves to.
-    pub fn set_serif_family<S: Into<String>>(&mut self, family: S) {
-        self.family_serif = family.into();
-    }
-
-    /// Sets the family that [`Family::SansSerif`] resolves to.
-    pub fn set_sans_serif_family<S: Into<String>>(&mut self, family: S) {
-        self.family_sans_serif = family.into();
-    }
-
-    /// Sets the family that [`Family::Cursive`] resolves to.
-    pub fn set_cursive_family<S: Into<String>>(&mut self, family: S) {
-        self.family_cursive = family.into();
-    }
-
-    /// Sets the family that [`Family::Fantasy`] resolves to.
-    pub fn set_fantasy_family<S: Into<String>>(&mut self, family: S) {
-        self.family_fantasy = family.into();
-    }
-
-    /// Sets the family that [`Family::Monospace`] resolves to.
-    pub fn set_monospace_family<S: Into<String>>(&mut self, family: S) {
-        self.family_monospace = family.into();
+    /// Sets the family that `generic` resolves to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fontgres_core::{Database, Family, GenericFamily};
+    ///
+    /// let mut db = Database::new();
+    /// db.set_generic_family(GenericFamily::Monospace, "Iosevka");
+    /// let monospace = Family::Generic(GenericFamily::Monospace);
+    /// assert_eq!(db.family_name(&monospace), "Iosevka");
+    /// ```
+    pub fn set_generic_family<S: Into<String>>(&mut self, generic: GenericFamily, family: S) {
+        *self.generic_families.get_mut(generic) = family.into();
     }
 
     /// Returns the family name `family` resolves to in this database.
     ///
     /// A [`Family::Name`] resolves to its own name. A generic family resolves to
-    /// the family set by the matching `set_*_family` method, such as
-    /// [`set_serif_family`](Database::set_serif_family), or to the default
-    /// listed on [`Database::new`].
+    /// the family [`set_generic_family`](Database::set_generic_family) gave
+    /// it, or to the default listed on [`Database::new`].
     pub fn family_name<'a>(&'a self, family: &'a Family<'_>) -> &'a str {
         match family {
             Family::Name(name) => name,
-            Family::Serif => self.family_serif.as_str(),
-            Family::SansSerif => self.family_sans_serif.as_str(),
-            Family::Cursive => self.family_cursive.as_str(),
-            Family::Fantasy => self.family_fantasy.as_str(),
-            Family::Monospace => self.family_monospace.as_str(),
+            Family::Generic(generic) => self.generic_families.get(*generic),
         }
     }
 
@@ -1338,7 +1297,6 @@ pub struct Query<'a> {
     pub style: Style,
 }
 
-// Enum value descriptions are from the CSS spec.
 /// Names a [font family](https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#propdef-font-family)
 /// or a CSS generic family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1352,24 +1310,9 @@ pub enum Family<'a> {
     /// Localized names are allowed.
     Name(&'a str),
 
-    /// Serif fonts represent the formal text style for a script.
-    Serif,
-
-    /// Glyphs in sans-serif fonts, as the term is used in CSS, are generally low contrast
-    /// and have stroke endings that are plain, without any flaring, cross stroke,
-    /// or other ornamentation.
-    SansSerif,
-
-    /// Glyphs in cursive fonts generally use a more informal script style,
-    /// and the result looks more like handwritten pen or brush writing than printed letterwork.
-    Cursive,
-
-    /// Fantasy fonts are primarily decorative or expressive fonts that
-    /// contain decorative or expressive representations of characters.
-    Fantasy,
-
-    /// The sole criterion of a monospace font is that all glyphs have the same fixed width.
-    Monospace,
+    /// A generic family, which stands for the family the database holds for
+    /// it.
+    Generic(GenericFamily),
 }
 
 /// The weight of a face's glyphs, their degree of blackness or stroke thickness.
@@ -1747,7 +1690,6 @@ const MAC_ROMAN: &[u16; 256] = &[
 
 #[cfg(feature = "fs")]
 pub mod env;
-#[cfg(any(test, feature = "fs"))]
 mod generic_family;
 mod postscript_name;
 #[cfg(feature = "fs")]
@@ -1766,7 +1708,7 @@ pub mod error;
 pub mod models;
 
 #[cfg(feature = "cli")]
-pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig, GenericFamilies};
+pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig};
 #[cfg(feature = "cli")]
 pub use error::{ConfigError, Error};
 

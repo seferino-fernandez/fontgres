@@ -9,6 +9,7 @@
 use crate::Result;
 use crate::env::{Env, SystemEnv, env_non_empty, env_parse_bool};
 use crate::error::ConfigError;
+use crate::{GenericFamilies, GenericFamily};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
@@ -93,7 +94,8 @@ pub struct FontsConfig {
     /// Individual font files to load. Each must hold a font, unless an
     /// earlier directory or file already loaded it.
     pub files: Vec<PathBuf>,
-    /// Families that CSS generic family names resolve to.
+    /// The family each CSS generic family name resolves to. `None` keeps the
+    /// database's built-in default.
     pub generic: GenericFamilies,
 }
 
@@ -106,23 +108,6 @@ impl Default for FontsConfig {
             generic: GenericFamilies::default(),
         }
     }
-}
-
-/// The family each CSS generic family name resolves to. `None` keeps the
-/// database's built-in default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GenericFamilies {
-    /// Family used for `serif`.
-    pub serif: Option<String>,
-    /// Family used for `sans-serif`.
-    pub sans_serif: Option<String>,
-    /// Family used for `cursive`.
-    pub cursive: Option<String>,
-    /// Family used for `fantasy`.
-    pub fantasy: Option<String>,
-    /// Family used for `monospace`.
-    pub monospace: Option<String>,
 }
 
 /// Explicit values that sit above every other layer, typically CLI flags.
@@ -201,26 +186,12 @@ struct FontsFile {
     generic: GenericFamilies,
 }
 
-/// Environment variables for each [`GenericFamilies`] field.
-const GENERIC_FAMILY_ENV: [&str; 5] = [
-    "FONTGRES_FONTS_GENERIC_SERIF",
-    "FONTGRES_FONTS_GENERIC_SANS_SERIF",
-    "FONTGRES_FONTS_GENERIC_CURSIVE",
-    "FONTGRES_FONTS_GENERIC_FANTASY",
-    "FONTGRES_FONTS_GENERIC_MONOSPACE",
-];
-
-impl GenericFamilies {
-    /// Mutable access to each field, in [`GENERIC_FAMILY_ENV`] order.
-    fn fields_mut(&mut self) -> [&mut Option<String>; 5] {
-        [
-            &mut self.serif,
-            &mut self.sans_serif,
-            &mut self.cursive,
-            &mut self.fantasy,
-            &mut self.monospace,
-        ]
-    }
+/// The environment variable that sets the family of `generic`:
+/// `FONTGRES_FONTS_GENERIC_` and the CSS name in upper snake case, such as
+/// `FONTGRES_FONTS_GENERIC_SANS_SERIF`.
+fn generic_family_env(generic: GenericFamily) -> String {
+    let name = generic.css_name().replace('-', "_").to_ascii_uppercase();
+    format!("FONTGRES_FONTS_GENERIC_{name}")
 }
 
 /// Splits a path-list variable (`:`-separated on Unix, `;` on Windows) into
@@ -303,15 +274,9 @@ impl Config {
         if let Some(v) = env_paths(env, "FONTGRES_FONTS_FILES") {
             config.fonts.files = v;
         }
-        for (field, key) in config
-            .fonts
-            .generic
-            .fields_mut()
-            .into_iter()
-            .zip(GENERIC_FAMILY_ENV)
-        {
-            if let Some(v) = env_non_empty(env, key) {
-                *field = Some(v);
+        for generic in GenericFamily::ALL {
+            if let Some(v) = env_non_empty(env, &generic_family_env(generic)) {
+                *config.fonts.generic.get_mut(generic) = Some(v);
             }
         }
 
