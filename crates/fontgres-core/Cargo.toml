@@ -45,7 +45,6 @@ schema = ["cli", "dep:schemars"]
 [dependencies]
 log.workspace = true
 memmap2 = { workspace = true, optional = true }
-slotmap.workspace = true
 tinyvec.workspace = true
 clap = { workspace = true, optional = true }
 clap_complete = { workspace = true, optional = true }

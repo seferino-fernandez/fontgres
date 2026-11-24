@@ -38,7 +38,7 @@ fn pick(faces: &[FaceInfo], stretch: Stretch, style: Style, weight: u16) -> Opti
         stretch,
         style,
     };
-    let id = database.query(&query)?;
+    let id = database.query(&query)?.id;
     ids.iter().position(|&candidate| candidate == id)
 }
 

@@ -14,7 +14,7 @@ fn a_face_without_a_postscript_name_loads_with_one_made_from_its_family() {
     let mut database = Database::new();
     database.load_font_data(std::fs::read(MISSING_PS).unwrap());
 
-    let faces: Vec<_> = database.faces().collect();
+    let faces = database.faces();
     assert_eq!(faces.len(), 1);
     assert_eq!(faces[0].families[0].0, "Tuffy Missing PS");
     assert_eq!(faces[0].post_script_name, "Tuffy-Missing-PS");

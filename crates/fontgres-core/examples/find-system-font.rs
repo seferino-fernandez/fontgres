@@ -39,15 +39,15 @@ fn main() {
     };
 
     let query_start = std::time::Instant::now();
-    let Some(id) = db.query(&query) else {
+    let Some(face) = db.query(&query) else {
         println!("Error: '{FAMILY_NAME}' not found.");
         return;
     };
-    if let Some((fontdb::Source::File(path), index)) = db.face_source(id) {
+    if let fontdb::Source::File(path) = &face.source {
         println!(
             "Font '{}':{} found in {}ms.",
             path.display(),
-            index,
+            face.index,
             query_start.elapsed().as_secs_f64() * 1000.0
         );
     }

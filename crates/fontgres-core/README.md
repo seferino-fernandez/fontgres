@@ -6,9 +6,21 @@ behind the `fontgres` CLI and the `fontgres-mcp` server.
 
 ## The font database
 
-The crate root is fontdb's API, unchanged apart from the removal of
-`Database::make_shared_face_data`: load fonts from files, directories, raw data
-or the system into a `Database`, then list them or match one with a `Query`.
+The crate root began as fontdb's API: load fonts from files, directories, raw
+data or the system into a `Database`, then list them or match one with a
+`Query`. It has since diverged:
+
+- A database only gains faces. `remove_face` is gone; to drop faces, build a
+  new database.
+- Faces are kept in load order. `faces()` returns them as a slice, an `ID` is a
+  face's position in it, and a query that finds several equally good faces
+  returns the one loaded first. A directory loads in the order of its file
+  names, so that order is the same on every machine.
+- `query` returns the face, not its ID, and `family_faces` returns every face
+  of a family.
+- `Source::File` holds a shared path. `Source::SharedFile`,
+  `make_shared_face_data`, `make_face_data_unshared` and `face_source` are
+  gone.
 
 ```rust,no_run
 use fontgres_core::{Database, Family, Query, Weight};
@@ -20,8 +32,7 @@ let query = Query {
     weight: Weight::BOLD,
     ..Query::default()
 };
-if let Some(id) = db.query(&query) {
-    let face = db.face(id).expect("a matched id is in the database");
+if let Some(face) = db.query(&query) {
     assert!(!face.families.is_empty());
 }
 ```

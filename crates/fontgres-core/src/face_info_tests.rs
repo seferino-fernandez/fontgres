@@ -222,34 +222,3 @@ fn post_declares_italic_and_monospaced() {
         assert_eq!((face.monospaced, face.style), (monospaced, style));
     }
 }
-
-#[cfg(all(feature = "fs", feature = "memmap"))]
-#[test]
-fn unsharing_a_face_unshares_every_face_mapped_from_its_file() {
-    use std::path::PathBuf;
-
-    use super::{Database, ID};
-
-    let shared = |path: &str| Source::SharedFile(PathBuf::from(path), Arc::new(Vec::<u8>::new()));
-    let mut database = Database::new();
-    let ids: Vec<ID> = [shared("a.ttc"), shared("a.ttc"), shared("b.ttf")]
-        .into_iter()
-        .map(|source| {
-            let mut face = parse(font(TRUETYPE, &[(b"name", english_name("Font"))])).unwrap();
-            face.source = source;
-            database.push_face_info(face)
-        })
-        .collect();
-
-    database.make_face_data_unshared(ids[0]);
-
-    let kinds: Vec<_> = ids
-        .iter()
-        .map(|&id| match database.face_source(id).unwrap().0 {
-            Source::File(path) => format!("file {}", path.display()),
-            Source::SharedFile(path, _) => format!("shared {}", path.display()),
-            Source::Binary(_) => "binary".to_string(),
-        })
-        .collect();
-    assert_eq!(kinds, ["file a.ttc", "file a.ttc", "shared b.ttf"]);
-}
