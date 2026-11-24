@@ -27,7 +27,7 @@ data or the system into a `Database`, then list them or match one with a
   error when the directory it is given cannot be read.
 
 ```rust,no_run
-use fontgres_core::{Database, Family, Query, Weight};
+use fontgres_core::{Database, Family, GenericFamily, Query, Weight};
 
 let mut db = Database::new();
 let report = db.load_system_fonts();
@@ -35,7 +35,10 @@ for failure in report.failures() {
     eprintln!("{failure}");
 }
 let query = Query {
-    families: &[Family::Name("Noto Sans"), Family::SansSerif],
+    families: &[
+        Family::Name("Noto Sans"),
+        Family::Generic(GenericFamily::SansSerif),
+    ],
     weight: Weight::BOLD,
     ..Query::default()
 };

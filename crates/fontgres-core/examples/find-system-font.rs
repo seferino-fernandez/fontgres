@@ -21,11 +21,7 @@ fn main() {
     let mut db = fontdb::Database::new();
     let load_start = std::time::Instant::now();
     let report = db.load_system_fonts();
-    db.set_serif_family("Times New Roman");
-    db.set_sans_serif_family("Arial");
-    db.set_cursive_family("Comic Sans MS");
-    db.set_fantasy_family("Impact");
-    db.set_monospace_family("Courier New");
+    db.set_generic_family(fontdb::GenericFamily::SansSerif, "Arial");
     println!(
         "Loaded {} font faces in {}ms.",
         db.len(),
@@ -36,7 +32,10 @@ fn main() {
     }
 
     let query = fontdb::Query {
-        families: &[fontdb::Family::Name(FAMILY_NAME), fontdb::Family::SansSerif],
+        families: &[
+            fontdb::Family::Name(FAMILY_NAME),
+            fontdb::Family::Generic(fontdb::GenericFamily::SansSerif),
+        ],
         weight: fontdb::Weight::BOLD,
         ..fontdb::Query::default()
     };
