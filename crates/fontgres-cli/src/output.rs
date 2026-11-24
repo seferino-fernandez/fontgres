@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::{self, BufWriter, ErrorKind, Write};
 
-use comfy_table::{ContentArrangement, Table};
 use serde::Serialize;
+use unicode_width::UnicodeWidthStr;
 
 /// Output format for CLI commands.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -34,8 +34,8 @@ impl fmt::Display for StdoutClosed {
 impl std::error::Error for StdoutClosed {}
 
 /// Prints a command's result to stdout in `format`: `data` as JSON, or the
-/// `rows` under `headers` as a table or CSV. `rows` is called only for a
-/// format that prints rows.
+/// `rows` under `headers` as a table or CSV, each row holding a cell per
+/// header. `rows` is called only for a format that prints rows.
 ///
 /// stdout stays locked for the whole result, which ends with a newline and is
 /// buffered, so that a row is not a write of its own.
@@ -82,15 +82,67 @@ fn write_json<T: Serialize>(out: &mut impl Write, data: &T) -> io::Result<()> {
     out.write_all(b"\n")
 }
 
-/// Writes `rows` to `out` as a [`comfy_table`] table under `headers`.
-fn write_table(out: &mut impl Write, headers: &[&str], rows: &[Vec<String>]) -> io::Result<()> {
-    let mut table = Table::new();
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-    table.set_header(headers);
-    for row in rows {
-        table.add_row(row);
+/// The spaces between two columns of a table.
+const COLUMN_GAP: usize = 2;
+
+/// The text of a table cell: `text` with each control character as its
+/// escape, such as `\n` or `\u{1b}`, so that a line break in a name does not
+/// break the line and an escape sequence does not reach the terminal.
+fn table_cell(text: &str) -> Cow<'_, str> {
+    if text.contains(char::is_control) {
+        let escape = |character: char| -> String {
+            if character.is_control() {
+                character.escape_default().collect()
+            } else {
+                character.into()
+            }
+        };
+        Cow::Owned(text.chars().map(escape).collect())
+    } else {
+        Cow::Borrowed(text)
     }
-    writeln!(out, "{table}")
+}
+
+/// Writes `cells` to `out` as one table line, each cell but the last padded
+/// to its column's width in `widths` and followed by the gap.
+fn write_table_line<'a>(
+    out: &mut impl Write,
+    widths: &[usize],
+    cells: impl IntoIterator<Item = &'a str>,
+) -> io::Result<()> {
+    let mut cells = cells.into_iter().zip(widths).peekable();
+    while let Some((cell, width)) = cells.next() {
+        let cell = table_cell(cell);
+        out.write_all(cell.as_bytes())?;
+        if cells.peek().is_some() {
+            let padding = width
+                .saturating_sub(cell.width())
+                .saturating_add(COLUMN_GAP);
+            write!(out, "{:padding$}", "")?;
+        }
+    }
+    out.write_all(b"\n")
+}
+
+/// Writes `rows` to `out` as a table: a `headers` line, then a line per row,
+/// with no borders. A column is as wide as its widest cell appears on a
+/// terminal, where a wide character such as a kana takes two columns, and no
+/// cell is wrapped or cut, so a row is always one line.
+fn write_table(out: &mut impl Write, headers: &[&str], rows: &[Vec<String>]) -> io::Result<()> {
+    let mut widths: Vec<usize> = headers
+        .iter()
+        .map(|header| table_cell(header).width())
+        .collect();
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(table_cell(cell).width());
+        }
+    }
+    write_table_line(out, &widths, headers.iter().copied())?;
+    for row in rows {
+        write_table_line(out, &widths, row.iter().map(String::as_str))?;
+    }
+    Ok(())
 }
 
 /// Escapes a single CSV field, quoting it when necessary.
@@ -191,14 +243,45 @@ mod tests {
     }
 
     #[test]
-    fn table_is_a_bordered_grid_under_the_headers() {
+    fn table_is_a_header_line_then_an_aligned_line_per_row() {
         assert_eq!(
-            printed(OutputFormat::Table, &[["Tuffy", "500"]]),
-            "+--------+--------+\n\
-             | Family | Weight |\n\
-             +=================+\n\
-             | Tuffy  | 500    |\n\
-             +--------+--------+\n"
+            printed(
+                OutputFormat::Table,
+                &[["Tuffy", "500"], ["Tuffy Condensed", "90"]]
+            ),
+            "Family           Weight\n\
+             Tuffy            500\n\
+             Tuffy Condensed  90\n"
+        );
+        assert_eq!(printed(OutputFormat::Table, &[]), "Family  Weight\n");
+    }
+
+    /// A wide character takes two columns of a terminal, so it counts as two.
+    #[test]
+    fn table_columns_align_by_display_width() {
+        assert_eq!(
+            printed(
+                OutputFormat::Table,
+                &[["游ゴシック体", "400"], ["Tuffy", "500"]]
+            ),
+            "Family        Weight\n\
+             游ゴシック体  400\n\
+             Tuffy         500\n"
+        );
+    }
+
+    /// A line break or an escape sequence in a name would break the line or
+    /// reach the terminal: the table shows each as text.
+    #[test]
+    fn table_shows_a_control_character_as_its_escape() {
+        assert_eq!(
+            printed(
+                OutputFormat::Table,
+                &[["Tuf\nfy\u{1b}[1m", "500"], ["Tuffy\u{85}", "90\t"]]
+            ),
+            "Family            Weight\n\
+             Tuf\\nfy\\u{1b}[1m  500\n\
+             Tuffy\\u{85}       90\\t\n"
         );
     }
 

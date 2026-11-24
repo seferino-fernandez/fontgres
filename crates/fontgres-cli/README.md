@@ -57,6 +57,19 @@ fontgres --output json faces | jq '.[] | select(.monospaced) | .family'
 fontgres --output csv faces > faces.csv
 ```
 
+The table is a header line and then one line per row, with the columns aligned
+and no cell wrapped or cut:
+
+```text
+$ fontgres query Helvetica
+Family     Subfamily  PostScript name  Weight  Style   Stretch  Monospaced  Path                                 Index
+Helvetica  Regular    Helvetica        400     normal  normal   false       /System/Library/Fonts/Helvetica.ttc  0
+```
+
+A listing of faces is wider than most terminals, and `fontgres faces | less -S`
+scrolls it sideways. A control character in a name, such as a line break,
+shows as its escape (`\n`) in the table; JSON and CSV carry the name as it is.
+
 ## Configuration
 
 Config file default location: `~/.config/fontgres/config.toml`
