@@ -212,23 +212,11 @@ mod tests {
         }
     }
 
+    /// Every argument of the list tools has a default, so a call may send an
+    /// empty object or no arguments at all.
     #[tokio::test]
-    async fn zero_argument_tool_rejects_any_key_but_accepts_empty_or_absent_arguments() {
+    async fn a_tool_with_only_optional_arguments_accepts_empty_or_absent_arguments() {
         let tools = tools();
-
-        let result = complete(
-            call(
-                &tools,
-                Caller::Stdio,
-                "fontgres_list_families",
-                json!({ "foo": 1 }),
-            )
-            .await,
-        );
-        assert_eq!(
-            first_text(&result),
-            "failed to deserialize parameters: unknown field `foo`, there are no fields"
-        );
 
         let empty =
             complete(call(&tools, Caller::Stdio, "fontgres_list_families", json!({})).await);
@@ -242,6 +230,11 @@ mod tests {
         );
         assert_succeeded(&empty, "empty arguments");
         assert_succeeded(&absent, "absent arguments");
+        assert_eq!(empty.structured_content, absent.structured_content);
+        assert_eq!(
+            empty.structured_content,
+            Some(json!({ "items": ["Tuffy"], "total": 1, "next_offset": null }))
+        );
     }
 
     #[tokio::test]
@@ -252,7 +245,7 @@ mod tests {
             (
                 "fontgres_list_faces",
                 json!({ "Family": "Tuffy" }),
-                "unknown field `Family`, expected `family`",
+                "unknown field `Family`, expected one of `family`, `limit`, `offset`",
             ),
             (
                 "fontgres_query_font",

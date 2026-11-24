@@ -29,9 +29,10 @@ pub(crate) struct Inner {
     /// The tools `tools/list` advertises: the router's tools, sorted by name.
     /// They share their schemas with the router.
     pub(super) advertised: Vec<Tool>,
-    /// Maximum exact serialized size (bytes) of a tool result before it is
-    /// replaced with a bounded `response_too_large` result or, when the limit
-    /// cannot hold that diagnostic, a protocol error.
+    /// Maximum exact serialized size (bytes) of a tool result. The list tools
+    /// cut each page to it; any other result over it is replaced with a
+    /// bounded `response_too_large` result or, when the limit cannot hold
+    /// that diagnostic, a protocol error.
     pub(super) max_response_bytes: usize,
 }
 

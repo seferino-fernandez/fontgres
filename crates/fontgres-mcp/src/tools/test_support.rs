@@ -5,14 +5,15 @@
 //! as they do in production.
 
 use super::handler::AppTools;
-use fontgres_core::FontsConfig;
+use fontgres_core::{Database, FaceInfo, FontsConfig, Language, Weight};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Extensions, JsonObject, NumberOrString,
 };
 use rmcp::service::{RequestContext, serve_directly};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// The production default response budget, 1 MiB.
 const DEFAULT_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -30,16 +31,51 @@ pub(crate) fn tools() -> AppTools {
     tools_with_budget(DEFAULT_RESPONSE_BYTES)
 }
 
+/// Tuffy.ttf, the one font file the tests load.
+fn test_font() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../fontgres-core/tests/fonts/Tuffy.ttf")
+}
+
 /// [`tools`] with a response budget of `max_response_bytes`.
 pub(crate) fn tools_with_budget(max_response_bytes: usize) -> AppTools {
     let fonts = FontsConfig {
         system: false,
-        files: vec![
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../fontgres-core/tests/fonts/Tuffy.ttf"),
-        ],
+        files: vec![test_font()],
         ..FontsConfig::default()
     };
     let database = fonts.build_database().expect("the test font loads");
+    AppTools::new(database, max_response_bytes)
+}
+
+/// The test font's face, loaded from memory, so it has no path and
+/// serializes to the same bytes on every machine.
+static FACE_WITHOUT_A_PATH: LazyLock<FaceInfo> = LazyLock::new(|| {
+    let mut database = Database::new();
+    let report = database.load_font_data(std::fs::read(test_font()).expect("the test font reads"));
+    assert!(report.failures().is_empty(), "{report:?}");
+    let face = database.faces().first().expect("the test font has a face");
+    face.clone()
+});
+
+/// A normal face of `family` at `weight`, with no path.
+pub(crate) fn face(family: &str, weight: u16) -> FaceInfo {
+    let mut face = FACE_WITHOUT_A_PATH.clone();
+    face.families = vec![(family.to_owned(), Language::English_UnitedStates)];
+    face.post_script_name = format!("{family}-{weight}").replace(' ', "-");
+    face.weight = Weight(weight);
+    face
+}
+
+/// Tools over a database holding `faces`, loaded in that order, with a
+/// response budget of `max_response_bytes`.
+pub(crate) fn tools_over(
+    faces: impl IntoIterator<Item = FaceInfo>,
+    max_response_bytes: usize,
+) -> AppTools {
+    let mut database = Database::new();
+    for face in faces {
+        database.push_face_info(face);
+    }
     AppTools::new(database, max_response_bytes)
 }
 

@@ -32,7 +32,10 @@ pub(crate) fn faces(
     args: &FacesArgs,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let faces = models::faces(database, args.family.as_deref());
+    let faces: Vec<Face> = models::faces(database, args.family.as_deref())
+        .into_iter()
+        .map(Face::from)
+        .collect();
     match format {
         OutputFormat::Json => output::print_json(&faces),
         OutputFormat::Table => Ok(output::print_table(&FACE_HEADERS, &face_rows(&faces))?),
@@ -43,7 +46,7 @@ pub(crate) fn faces(
 /// Lists the distinct family names in `database`.
 pub(crate) fn families(database: &Database, format: OutputFormat) -> anyhow::Result<()> {
     let names = models::family_names(database);
-    let rows: Vec<Vec<String>> = names.iter().map(|name| vec![name.clone()]).collect();
+    let rows: Vec<Vec<String>> = names.iter().map(|name| vec![(*name).to_owned()]).collect();
     match format {
         OutputFormat::Json => output::print_json(&names),
         OutputFormat::Table => Ok(output::print_table(&["Family"], &rows)?),

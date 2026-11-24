@@ -45,10 +45,9 @@ pub struct Face {
 
 impl From<&FaceInfo> for Face {
     fn from(info: &FaceInfo) -> Self {
-        let families: Vec<String> = info.families.iter().map(|(name, _)| name.clone()).collect();
         Self {
-            family: families.first().cloned().unwrap_or_default(),
-            families,
+            family: primary_family(info).to_owned(),
+            families: info.families.iter().map(|(name, _)| name.clone()).collect(),
             post_script_name: info.post_script_name.clone(),
             style: info.style,
             weight: info.weight.0,
@@ -199,35 +198,47 @@ fn family(name: &str) -> Family<'_> {
     GenericFamily::from_css_name(name).map_or(Family::Name(name), Family::Generic)
 }
 
-/// Returns the faces in `database`, sorted by family, then weight, style,
-/// stretch and `PostScript` name.
+/// The name a face is listed under: its primary family name.
+fn primary_family(info: &FaceInfo) -> &str {
+    info.families.first().map_or("", |(name, _)| name.as_str())
+}
+
+/// Returns the faces in `database` in listing order: sorted by primary
+/// family name, then weight, style, stretch and `PostScript` name. Faces
+/// equal in all five keep their load order.
 ///
 /// With `family`, returns only the faces that carry that family name in any
 /// language, compared ignoring ASCII case.
-pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
-    let mut faces: Vec<Face> = match family {
-        Some(wanted) => database.family_faces(wanted).map(Face::from).collect(),
-        None => database.faces().iter().map(Face::from).collect(),
+///
+/// The listing borrows from the database. [`Face::from`] copies a face out
+/// of it, so a caller that shows one page of the listing copies only that
+/// page.
+pub fn faces<'a>(database: &'a Database, family: Option<&str>) -> Vec<&'a FaceInfo> {
+    let mut faces: Vec<&'a FaceInfo> = match family {
+        Some(wanted) => database.family_faces(wanted).collect(),
+        None => database.faces().iter().collect(),
     };
-    faces.sort_by(|a, b| {
-        a.family
-            .cmp(&b.family)
-            .then(a.weight.cmp(&b.weight))
-            .then((a.style as u8).cmp(&(b.style as u8)))
-            .then((a.stretch as u8).cmp(&(b.stretch as u8)))
-            .then(a.post_script_name.cmp(&b.post_script_name))
+    faces.sort_by_key(|info| {
+        let info: &'a FaceInfo = info;
+        (
+            primary_family(info),
+            info.weight,
+            info.style as u8,
+            info.stretch,
+            info.post_script_name.as_str(),
+        )
     });
     faces
 }
 
 /// Returns the distinct primary family names in `database`, sorted.
-pub fn family_names(database: &Database) -> Vec<String> {
-    let mut names: Vec<String> = database
+pub fn family_names(database: &Database) -> Vec<&str> {
+    let mut names: Vec<&str> = database
         .faces()
         .iter()
-        .filter_map(|info| info.families.first().map(|(name, _)| name.clone()))
+        .filter_map(|info| info.families.first().map(|(name, _)| name.as_str()))
         .collect();
-    names.sort();
+    names.sort_unstable();
     names.dedup();
     names
 }
@@ -323,7 +334,7 @@ mod tests {
         let database = tuffy_only().build_database().unwrap();
         let faces = faces(&database, None);
         assert_eq!(faces.len(), 1);
-        let face = &faces[0];
+        let face = Face::from(faces[0]);
         assert_eq!(face.family, "Tuffy");
         assert_eq!(face.families.first().map(String::as_str), Some("Tuffy"));
         assert_eq!(face.post_script_name, "Tuffy");
@@ -344,13 +355,13 @@ mod tests {
         let mut database = Database::new();
         let report = database.load_font_data(std::fs::read(fonts_dir().join("Tuffy.ttf")).unwrap());
         assert_eq!(report.added().len(), 1);
-        assert_eq!(faces(&database, None)[0].path, None);
+        assert_eq!(Face::from(faces(&database, None)[0]).path, None);
     }
 
     #[test]
     fn face_serializes_with_css_keywords() {
         let database = tuffy_only().build_database().unwrap();
-        let value = serde_json::to_value(&faces(&database, None)[0]).unwrap();
+        let value = serde_json::to_value(Face::from(faces(&database, None)[0])).unwrap();
         assert_eq!(value["style"], "normal");
         assert_eq!(value["stretch"], "normal");
         assert_eq!(
@@ -363,7 +374,121 @@ mod tests {
     fn family_filter_ignores_case_and_drops_other_families() {
         let database = tuffy_only().build_database().unwrap();
         assert_eq!(faces(&database, Some("tUFFY")).len(), 1);
-        assert_eq!(faces(&database, Some("Nope")), Vec::<Face>::new());
+        assert!(faces(&database, Some("Nope")).is_empty());
+    }
+
+    /// A face that was never in a font file, for listings that need faces
+    /// Tuffy.ttf does not hold.
+    fn face(family: &str, weight: u16, style: Style, stretch: Stretch, name: &str) -> FaceInfo {
+        FaceInfo {
+            id: crate::ID::dummy(),
+            source: Source::Binary(std::sync::Arc::new(Vec::<u8>::new())),
+            index: 0,
+            families: vec![(family.to_owned(), crate::Language::English_UnitedStates)],
+            post_script_name: name.to_owned(),
+            style,
+            weight: Weight(weight),
+            stretch,
+            monospaced: false,
+        }
+    }
+
+    fn database_of(faces: impl IntoIterator<Item = FaceInfo>) -> Database {
+        let mut database = Database::new();
+        for face in faces {
+            database.push_face_info(face);
+        }
+        database
+    }
+
+    fn post_script_names<'a>(faces: &[&'a FaceInfo]) -> Vec<&'a str> {
+        faces
+            .iter()
+            .map(|face| face.post_script_name.as_str())
+            .collect()
+    }
+
+    /// Each face follows the one before it by one key, and in every key
+    /// after that one the earlier face is the larger. A listing that
+    /// compared the keys in another order would not give this order.
+    #[test]
+    fn faces_are_listed_by_family_then_weight_style_stretch_and_postscript_name() {
+        let listed = [
+            face("Alpha", 700, Style::Oblique, Stretch::Expanded, "z"),
+            face("Beta", 400, Style::Oblique, Stretch::Expanded, "z"),
+            face("Beta", 700, Style::Normal, Stretch::Expanded, "z"),
+            face("Beta", 700, Style::Italic, Stretch::Condensed, "z"),
+            face("Beta", 700, Style::Italic, Stretch::Normal, "a"),
+            face("Beta", 700, Style::Italic, Stretch::Normal, "b"),
+            face("Beta", 700, Style::Oblique, Stretch::UltraCondensed, "a"),
+        ];
+        // Each face's index is its place in the listing. They load last to
+        // first, so load order alone gives the reverse.
+        let mut numbered: Vec<FaceInfo> = listed
+            .into_iter()
+            .zip(0_u32..)
+            .map(|(mut info, place)| {
+                info.index = place;
+                info
+            })
+            .collect();
+        numbered.reverse();
+        let database = database_of(numbered);
+        let places: Vec<u32> = faces(&database, None)
+            .iter()
+            .map(|face| face.index)
+            .collect();
+        assert_eq!(places, [0, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn faces_equal_in_every_listing_key_keep_their_load_order() {
+        let mut first = face("Alpha", 400, Style::Normal, Stretch::Normal, "same");
+        first.index = 7;
+        let second = face("Alpha", 400, Style::Normal, Stretch::Normal, "same");
+        let earlier = face("Alpha", 100, Style::Normal, Stretch::Normal, "thin");
+        let database = database_of([first, second, earlier]);
+        let indexes: Vec<u32> = faces(&database, None)
+            .iter()
+            .map(|face| face.index)
+            .collect();
+        assert_eq!(indexes, [0, 7, 0]);
+        assert_eq!(
+            post_script_names(&faces(&database, None)),
+            ["thin", "same", "same"]
+        );
+    }
+
+    #[test]
+    fn a_family_listing_is_sorted_too() {
+        let database = database_of([
+            face("Beta", 700, Style::Normal, Stretch::Normal, "beta-bold"),
+            face("Alpha", 400, Style::Normal, Stretch::Normal, "alpha"),
+            face("Beta", 400, Style::Normal, Stretch::Normal, "beta"),
+        ]);
+        assert_eq!(
+            post_script_names(&faces(&database, Some("beta"))),
+            ["beta", "beta-bold"]
+        );
+    }
+
+    #[test]
+    fn family_names_are_sorted_and_distinct() {
+        let mut nameless = face("", 400, Style::Normal, Stretch::Normal, "nameless");
+        nameless.families.clear();
+        let database = database_of([
+            face("Gamma", 400, Style::Normal, Stretch::Normal, "g"),
+            face("Alpha", 400, Style::Normal, Stretch::Normal, "a"),
+            nameless,
+            face("Gamma", 700, Style::Normal, Stretch::Normal, "g-bold"),
+            face("Beta", 400, Style::Normal, Stretch::Normal, "b"),
+        ]);
+        assert_eq!(family_names(&database), ["Alpha", "Beta", "Gamma"]);
+        // A face without a family name is listed, under the empty name.
+        assert_eq!(
+            Face::from(faces(&database, None)[0]).post_script_name,
+            "nameless"
+        );
     }
 
     #[test]

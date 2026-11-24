@@ -50,10 +50,14 @@ pub(super) fn close_object_map(map: &mut Map<String, Value>) {
 ///
 /// Measures the exact serialized [`CallToolResult`]: `content`,
 /// `structured_content` and every other field. If it exceeds `max_bytes`,
-/// returns a small result describing the overflow so the model can narrow its
-/// request. If even that diagnostic exceeds `max_bytes`, returns a protocol
-/// error rather than break the configured cap. Returns the original result
-/// otherwise.
+/// returns a small result describing the overflow. If even that diagnostic
+/// exceeds `max_bytes`, returns a protocol error rather than break the
+/// configured cap. Returns the original result otherwise.
+///
+/// The list tools cut each page to `max_bytes` themselves, so a result
+/// reaches the limit only when one item, one face or one error message is
+/// larger than it. Asking for less cannot help then, and the hint says to
+/// raise the limit.
 pub(super) fn enforce_response_budget(
     result: CallToolResult,
     max_bytes: usize,
@@ -70,7 +74,7 @@ pub(super) fn enforce_response_budget(
         "error": "response_too_large",
         "bytes": size,
         "limit": max_bytes,
-        "hint": "narrow the query (smaller page size, fewer results, or a more specific filter)"
+        "hint": "one result alone exceeds the limit; raise max_response_bytes"
     });
     let mut replacement = CallToolResult::success(vec![ContentBlock::text(body.to_string())]);
     replacement.is_error = was_error;
@@ -85,7 +89,7 @@ pub(super) fn enforce_response_budget(
 }
 
 /// The length of `result` serialized as JSON, as it goes on the wire.
-fn serialized_len(result: &CallToolResult) -> Result<usize, McpError> {
+pub(super) fn serialized_len(result: &CallToolResult) -> Result<usize, McpError> {
     serde_json::to_vec(result)
         .map(|bytes| bytes.len())
         .map_err(|_error| McpError::internal_error("failed to measure tool response", None))
@@ -224,8 +228,9 @@ mod router_tests {
 
     #[test]
     fn every_listed_tool_has_a_closed_output_schema() {
-        // Every tool returns `Json<T>`, so rmcp advertises an `outputSchema`.
-        // The MCP spec requires an object root, and the server lists it closed.
+        // Every tool advertises an `outputSchema`: rmcp derives it for a tool
+        // that returns `Json<T>`, and the list tools name theirs. The MCP spec
+        // requires an object root, and the server lists it closed.
         for tool in listed_tools() {
             let output = tool
                 .output_schema
@@ -247,20 +252,31 @@ mod router_tests {
     }
 
     #[test]
-    fn list_output_schemas_require_items_and_count() {
+    fn list_output_schemas_require_items_total_and_next_offset() {
         use serde_json::json;
 
-        for name in ["fontgres_list_faces", "fontgres_list_families"] {
+        for (name, item) in [
+            ("fontgres_list_faces", json!({ "$ref": "#/$defs/Face" })),
+            ("fontgres_list_families", json!({ "type": "string" })),
+        ] {
             let tool = listed_tools()
                 .into_iter()
                 .find(|tool| tool.name == name)
                 .unwrap();
             let schema = tool.output_schema.unwrap();
             let required = schema["required"].as_array().unwrap();
-            assert_eq!(required.len(), 2, "{name}");
+            assert_eq!(required.len(), 3, "{name}");
             assert!(required.contains(&json!("items")), "{name}");
-            assert!(required.contains(&json!("count")), "{name}");
+            assert!(required.contains(&json!("total")), "{name}");
+            assert!(required.contains(&json!("next_offset")), "{name}");
             assert_eq!(schema["additionalProperties"], false, "{name}");
+            let properties = &schema["properties"];
+            assert_eq!(properties["items"]["items"], item, "{name}");
+            assert_eq!(
+                properties["next_offset"]["type"],
+                json!(["integer", "null"]),
+                "{name}"
+            );
         }
     }
 
