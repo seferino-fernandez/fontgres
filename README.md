@@ -1,188 +1,94 @@
 # fontgres
 
-A fork of [fontdb](https://github.com/RazrFalcon/fontdb), the in-memory font
-database with CSS-like queries, with a CLI and an MCP server on top: list the
-fonts on a machine and find the face that best matches a CSS-style query, from
-a terminal or from an LLM client. (The name is a nod to fontdb, nothing more.)
+Find the fonts installed on a machine and answer CSS-style font queries about
+them, from a terminal, an [MCP](https://modelcontextprotocol.io) client or Rust code.
+
+```console
+$ fontgres query "Helvetica Neue" sans-serif --weight 700
+Family          Subfamily  PostScript name     Weight  Style   Stretch  Monospaced  Path                                     Index
+Helvetica Neue  Bold       HelveticaNeue-Bold  700     normal  normal   false       /System/Library/Fonts/HelveticaNeue.ttc  1
+```
+
+## What it does, and what it does not
+
+- **One face per query.** `query` takes families in priority order, as CSS
+  `font-family` does, with a weight, a style and a stretch. It prints the one
+  face that matches best by the CSS font matching rules, and exits 1 when no
+  face matches.
+- **Listings for people and for programs.** `faces` and `families` print an
+  aligned table, JSON or CSV. Logs go to stderr, so stdout is safe to pipe.
+- **The same answers for an LLM client.** `fontgres-mcp` serves three
+  read-only MCP tools over standard input and output.
+- **Nothing else to install.** The binary reads the font files itself and, on
+  Linux, fontconfig's configuration for the font directories. It links to no
+  font library.
+- **No database server, despite the name.** Nothing is stored: each run reads
+  the font files again, and the MCP server reads them once when it starts.
+- **Not a renderer.** It does not draw, shape or install fonts, and it has no
+  font fallback. Only TrueType and OpenType files (`.ttf`, `.otf`, `.ttc`,
+  `.otc`) load.
+- **A generic name is one family.** `sans-serif` stands for the single family
+  [the configuration](docs/configuration.md#generic-families) names, not for
+  the list of fonts a browser would try.
+
+## Install
+
+```shell
+brew install seferino-fernandez/tools/fontgres   # macOS and Linux
+cargo binstall fontgres-cli                      # a prebuilt binary
+cargo install fontgres-cli                       # from source, with Rust 1.100 or newer
+```
+
+The MCP server is a second binary, `fontgres-mcp`, and installs the same three
+ways under that name. [docs/installation.md](docs/installation.md) has the
+release archives, shell completions and man pages.
+
+## Usage
+
+```shell
+# Every family name
+fontgres families
+
+# The faces of one family
+fontgres faces --family "Noto Sans"
+
+# The best face for a query: families in priority order, then what is wanted
+fontgres query "Helvetica Neue" Arial sans-serif --weight 700 --style italic
+
+# The monospaced families, as JSON for another program
+fontgres --output json faces | jq '.[] | select(.monospaced) | .family'
+
+# Only the fonts in a directory
+fontgres --no-system-fonts --font-dir ./fonts faces
+```
+
+The [`fontgres-cli` README](crates/fontgres-cli/README.md) describes each
+command and output format, and [docs/configuration.md](docs/configuration.md)
+the config file, the environment variables and logging.
 
 ## Crates
 
-| Crate | Description |
+| Crate | What it is |
 | --- | --- |
-| `fontgres-core` | Font database library (forked from fontdb 0.24.0) |
-| `fontgres-cli` | Terminal CLI (`fontgres`) |
-| `fontgres-mcp` | MCP server (`fontgres-mcp`) for LLM clients |
+| [`fontgres-cli`](crates/fontgres-cli/README.md) | The `fontgres` command |
+| [`fontgres-mcp`](crates/fontgres-mcp/README.md) | The `fontgres-mcp` server, for MCP clients such as Claude Desktop |
+| [`fontgres-core`](crates/fontgres-core/README.md) | The font database as a Rust library ([API docs](https://docs.rs/fontgres-core)) |
 
-The CLI and the MCP server both depend on the core library, so font loading,
-queries, configuration and errors live in one place:
+## Status
 
-```text
-            fontgres-core  (Database, Config, models, errors)
-              /     \
-       fontgres-cli   fontgres-mcp
-     (clap CLI)   (MCP tools)
-```
+Early and in active development: 0.x, first released on 2026-11-23. Any 0.x
+release can change the CLI's output, the MCP tools' results and the library's
+public items; each crate's `CHANGELOG.md` lists what changed. CI runs the
+tests on Linux. Binaries are built for Linux, macOS and Windows, on `x86_64`
+and `aarch64`.
 
-## Installation
+## Contributing
 
-Prebuilt binaries for Linux, macOS and Windows (`x86_64` and `aarch64`) are attached
-to each [GitHub Release](https://github.com/seferino-fernandez/fontgres/releases).
-
-With Homebrew (macOS and Linux), which also installs shell completions and man pages:
-
-```shell
-brew tap seferino-fernandez/tools
-brew install fontgres
-brew install fontgres-mcp
-```
-
-With cargo-binstall, which downloads the prebuilt binary:
-
-```shell
-cargo binstall fontgres-cli
-cargo binstall fontgres-mcp
-```
-
-From source with cargo:
-
-```shell
-cargo install fontgres-cli
-cargo install fontgres-mcp
-```
-
-## Quick start
-
-Build the project:
-
-```shell
-cargo build
-```
-
-Run the project's tests:
-
-```shell
-cargo test
-```
-
-Run a command from the CLI:
-
-```shell
-cargo run -p fontgres-cli -- families
-cargo run -p fontgres-cli -- query "Helvetica Neue" sans-serif --weight 700
-```
-
-## Configuration
-
-Configuration is layered, highest precedence first:
-CLI flag, then `FONTGRES_*` env, then `config.toml`, then built-in defaults.
-It chooses which fonts load (`[fonts]`: the system's fonts, extra directories
-and files, and the families the CSS generic names resolve to) and the log level.
-See [`config.toml.example`](config.toml.example) for every setting. Mistakes
-fail at startup: an env value that does not parse is an error naming the
-variable, a config file named by `--config` or `FONTGRES_CONFIG` must exist, a
-config file that cannot be read is named, as is a font directory or file that
-cannot be read and a font file that holds no font, and a TOML error reports
-the line and column. A key or table the file does not expect is such an error,
-so a misspelt setting never silently does nothing. One file serves both
-binaries: `fontgres` accepts the server's `[mcp]` table without reading it.
-
-## Logging and verbosity flag
-
-Both binaries take `-v`/`--verbose` and `-q`/`--quiet` flags: `-q` silent;
-`-v` warn, `-vv` info, `-vvv` debug, `-vvvv` trace. Default level precedence,
-highest first:
-
-`RUST_LOG` → `-v`/`-q` (when passed) → `FONTGRES_LOG_LEVEL` / `[log] level` → built-in default
-
-The built-in default is `error` for the `fontgres` CLI and `info` for the
-`fontgres-mcp` server. An invalid level in `FONTGRES_LOG_LEVEL` or `[log] level`
-fails at startup, as any other invalid setting does, even when a flag would
-override it. The flags are accepted before or after the subcommand.
-`RUST_LOG` overrides everything (e.g. `RUST_LOG=fontgres_core=trace`). The
-warning for a font file or face that cannot be loaded follows the same level.
-
-## Shell completions
-
-The `fontgres` CLI supports static completions for bash, elvish, fish, nushell,
-powershell, and zsh, plus dynamic completions for every shell except nushell.
-
-**Static** - generate a script once and install it where your shell looks for it:
-
-```shell
-fontgres completions zsh     > ~/.zsh/completions/_fontgres
-```
-
-```shell
-fontgres completions bash    | sudo tee /usr/share/bash-completion/completions/fontgres
-```
-
-```shell
-fontgres completions fish    > ~/.config/fish/completions/fontgres.fish
-```
-
-```shell
-fontgres completions nushell > ~/.config/nushell/completions/fontgres.nu
-```
-
-**Dynamic** - let the binary drive completions at runtime via the `COMPLETE`
-environment variable. Add one line to your shell startup file:
-
-```shell
-echo 'source <(COMPLETE=zsh fontgres)'  >> ~/.zshrc
-```
-
-```shell
-echo 'source <(COMPLETE=bash fontgres)' >> ~/.bashrc
-```
-
-```shell
-echo 'COMPLETE=fish fontgres | source'  >> ~/.config/fish/completions/fontgres.fish
-```
-
-## Man pages
-
-The `fontgres` CLI generates ROFF man pages for itself and every subcommand into a
-directory (created if missing):
-
-```bash
-fontgres man ~/.local/share/man/man1
-```
-
-## MCP server
-
-`fontgres-mcp` implements MCP **2026-07-28** (`rmcp 3.x`) and exposes the font
-database to LLM clients over `stdio`, for local clients such as Claude Desktop.
-It loads its fonts once at startup, from the same configuration and flags as
-the CLI, and logs to stderr.
-
-Three read-only tools, `fontgres_list_faces`, `fontgres_list_families` and
-`fontgres_query_font`, answer from that snapshot. Tool input schemas are closed
-(`additionalProperties: false`), unknown arguments are refused, listings are
-paged, and tool results are capped to a configurable byte budget. See the
-[`fontgres-mcp` README](crates/fontgres-mcp/README.md) for details.
-
-## Quality guardrails
-
-`just verify` runs every check CI runs: formatting, strict Clippy lints, tests,
-docs, dependency policy, spelling, TOML style and the ast-grep rules.
-[`docs/quality-guardrails.md`](docs/quality-guardrails.md) lists each tool and
-what it catches; [`AGENTS.md`](AGENTS.md) holds the rules for coding agents.
-
-Install the tools once:
-
-```shell
-cargo install --locked just cargo-nextest cargo-deny cargo-shear typos-cli ast-grep prek
-cargo install --locked cargo-mutants   # optional: `just mutants-diff`
-prek install                           # run the fast checks on each commit
-```
-
-Tombi installs separately (see [its install guide](https://tombi-toml.github.io/tombi/docs/installation)),
-and `just dupes` needs Node.js for `npx`.
-
-## Releasing
-
-Releases are cut by release-plz from `main`; see [docs/releasing.md](docs/releasing.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the checks a
+change must pass.
 
 ## License
 
-[MIT](LICENSE.md)
+[MIT](LICENSE.md). The font database began as a fork of
+[fontdb](https://github.com/RazrFalcon/fontdb) by Yevhenii Reizner and its
+contributors.
