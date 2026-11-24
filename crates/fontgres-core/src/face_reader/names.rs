@@ -8,28 +8,31 @@ use super::ttf_parser::name::{Name, Names, Table};
 use super::ttf_parser::{LazyArray16, PlatformId, RawFace, Tag, name_id};
 use crate::postscript_name;
 
-/// Returns the face's family names and its `PostScript` name, or `None`
-/// when it has no family name that can be read.
-pub(super) fn read(raw_face: &RawFace<'_>) -> Option<(Vec<(String, Language)>, String)> {
+/// The names a face is known by.
+pub(super) struct FaceNames {
+    /// The family names with their languages, English (United States) first
+    /// when the font has one. Never empty.
+    pub(super) families: Vec<(String, Language)>,
+    /// The `PostScript` name, made from the first family when the font has
+    /// none.
+    pub(super) post_script_name: String,
+    /// The subfamily name, such as `Bold Italic`: the English (United
+    /// States) one when the font has one, and empty when it has none.
+    pub(super) subfamily: String,
+}
+
+/// Returns the face's names, or `None` when it has no family name that can
+/// be read.
+pub(super) fn read(raw_face: &RawFace<'_>) -> Option<FaceNames> {
     const NAME_TAG: Tag = Tag::from_bytes(*b"name");
     let name_data = raw_face.table(NAME_TAG)?;
     let name_table = Table::parse(name_data)?;
 
-    let mut families = collect_families(name_id::TYPOGRAPHIC_FAMILY, &name_table.names);
-
-    // We have to fallback to Family Name when no Typographic Family Name was set.
-    if families.is_empty() {
-        families = collect_families(name_id::FAMILY, &name_table.names);
-    }
-
-    // Make English US the first one.
-    if let Some(index) = families
-        .iter()
-        .position(|f| f.1 == Language::English_UnitedStates)
-    {
-        families.swap(0, index);
-    }
-
+    let families = english_first(
+        &name_table.names,
+        name_id::TYPOGRAPHIC_FAMILY,
+        name_id::FAMILY,
+    );
     let (first_family, _) = families.first()?;
 
     // A font without a PostScript name still loads, with one made from its
@@ -41,37 +44,80 @@ pub(super) fn read(raw_face: &RawFace<'_>) -> Option<(Vec<(String, Language)>, S
         .and_then(|name| name_to_unicode(&name))
         .unwrap_or_else(|| postscript_name::from_family(first_family));
 
-    Some((families, post_script_name))
+    let subfamily = [name_id::TYPOGRAPHIC_SUBFAMILY, name_id::SUBFAMILY]
+        .into_iter()
+        .find_map(|name_id| shown_name(name_id, &name_table.names))
+        .unwrap_or_default();
+
+    Some(FaceNames {
+        families,
+        post_script_name,
+        subfamily,
+    })
 }
 
-fn collect_families(name_id: u16, names: &Names<'_>) -> Vec<(String, Language)> {
-    let mut families = Vec::new();
+/// Returns the names the font holds under the name ID `typographic`, or
+/// under `legacy` when it holds none there, with the English (United States)
+/// one first.
+fn english_first(names: &Names<'_>, typographic: u16, legacy: u16) -> Vec<(String, Language)> {
+    let mut found = collect_names(typographic, names);
+    if found.is_empty() {
+        found = collect_names(legacy, names);
+    }
+    if let Some(index) = found
+        .iter()
+        .position(|(_, language)| *language == Language::English_UnitedStates)
+    {
+        found.swap(0, index);
+    }
+    found
+}
+
+/// Returns the one name under `name_id` to show for the face: the English
+/// (United States) one when the font has one, else the first, with a Unicode
+/// record ahead of a Macintosh Roman one. Only the name returned is decoded.
+fn shown_name(name_id: u16, names: &Names<'_>) -> Option<String> {
+    names
+        .iter()
+        .filter(|name| name.id == name_id && is_supported_encoding(name))
+        .min_by_key(|name| {
+            (
+                name.language() != Language::English_UnitedStates,
+                !name.is_unicode(),
+            )
+        })
+        .and_then(|name| name_to_unicode(&name))
+}
+
+/// Returns the Unicode names under `name_id`, and the first Macintosh Roman
+/// one when none of those is in English (United States).
+fn collect_names(name_id: u16, names: &Names<'_>) -> Vec<(String, Language)> {
+    let mut found = Vec::new();
     for name in names.iter() {
         if name.id == name_id
             && name.is_unicode()
-            && let Some(family) = name_to_unicode(&name)
+            && let Some(text) = name_to_unicode(&name)
         {
-            families.push((family, name.language()));
+            found.push((text, name.language()));
         }
     }
 
-    // If no Unicode English US family name was found then look for English MacRoman as well.
-    if !families
+    if !found
         .iter()
-        .any(|f| f.1 == Language::English_UnitedStates)
+        .any(|(_, language)| *language == Language::English_UnitedStates)
     {
         for name in names.iter() {
             if name.id == name_id
                 && is_mac_roman(&name)
-                && let Some(family) = name_to_unicode(&name)
+                && let Some(text) = name_to_unicode(&name)
             {
-                families.push((family, name.language()));
+                found.push((text, name.language()));
                 break;
             }
         }
     }
 
-    families
+    found
 }
 
 fn name_to_unicode(name: &Name<'_>) -> Option<String> {

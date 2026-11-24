@@ -21,6 +21,13 @@ const FAMILY: u16 = 1;
 const SUBFAMILY: u16 = 2;
 const POST_SCRIPT_NAME: u16 = 6;
 const TYPOGRAPHIC_FAMILY: u16 = 16;
+const TYPOGRAPHIC_SUBFAMILY: u16 = 17;
+/// The `macStyle` flags of a `head` table.
+const MAC_BOLD: u16 = 1;
+const MAC_ITALIC: u16 = 1 << 1;
+/// The `fsSelection` flags of an `OS/2` table.
+const SELECTION_ITALIC: u16 = 1;
+const SELECTION_OBLIQUE: u16 = 1 << 9;
 const TRUETYPE: [u8; 4] = [0, 1, 0, 0];
 
 fn be16(value: usize) -> [u8; 2] {
@@ -148,6 +155,28 @@ fn os2_table(version: u16, len: usize, weight: u16, width: u16, selection: u16) 
     table[6..8].copy_from_slice(&width.to_be_bytes());
     table[62..64].copy_from_slice(&selection.to_be_bytes());
     table
+}
+
+/// Returns a version 4 `OS/2` table declaring the weight class and
+/// `fsSelection`, at normal width.
+fn os2_weighing(weight: u16, selection: u16) -> Vec<u8> {
+    os2_table(4, 96, weight, 5, selection)
+}
+
+/// Returns a `head` table with the `macStyle` flags.
+fn head_table(mac_style: u16) -> Vec<u8> {
+    let mut table = vec![0; 54];
+    table[44..46].copy_from_slice(&mac_style.to_be_bytes());
+    table
+}
+
+/// Reads a face of the family Font with the English `subfamily` name and
+/// `tables`.
+fn styled_face(subfamily: &str, tables: &[(&[u8; 4], Vec<u8>)]) -> FaceProperties {
+    let names = name_table(&[english(FAMILY, "Font"), english(SUBFAMILY, subfamily)]);
+    let mut tables = tables.to_vec();
+    tables.push((b"name", names));
+    parse(&font(TRUETYPE, &tables)).unwrap()
 }
 
 /// Returns a `post` table with `italicAngle` and `isFixedPitch`.
@@ -539,4 +568,202 @@ fn post_declares_italic_and_monospaced() {
         let face = named_face_with(*b"post", post);
         assert_eq!((face.monospaced, face.style), (monospaced, style));
     }
+}
+
+/// The format allows weight classes from 1 to 1000 and they are kept, the
+/// ones below 100 included. 0 declares no weight and anything above 1000 is
+/// the heaviest.
+#[test]
+fn a_weight_class_outside_1_to_1000_is_brought_into_it() {
+    let cases = [
+        (0, 400),
+        (1, 1),
+        (5, 5),
+        (99, 99),
+        (1000, 1000),
+        (1001, 1000),
+        (u16::MAX, 1000),
+    ];
+    for (declared, weight) in cases {
+        let face = styled_face("Regular", &[(b"OS/2", os2_weighing(declared, 0))]);
+        assert_eq!(face.weight, Weight(weight), "weight class {declared}");
+    }
+}
+
+#[test]
+fn a_face_without_os2_takes_bold_and_italic_from_mac_style() {
+    // Bit 2 flags an underline, which is neither.
+    let cases = [
+        (0, 400, Style::Normal),
+        (MAC_BOLD, 700, Style::Normal),
+        (MAC_ITALIC, 400, Style::Italic),
+        (MAC_BOLD | MAC_ITALIC, 700, Style::Italic),
+        (1 << 2, 400, Style::Normal),
+    ];
+    for (mac_style, weight, style) in cases {
+        let face = styled_face("Regular", &[(b"head", head_table(mac_style))]);
+        assert_eq!(
+            (face.weight, face.style),
+            (Weight(weight), style),
+            "macStyle {mac_style}"
+        );
+    }
+}
+
+#[test]
+fn mac_style_is_not_read_when_os2_declares_the_face() {
+    let face = styled_face(
+        "Medium",
+        &[
+            (b"OS/2", os2_weighing(400, 0)),
+            (b"head", head_table(MAC_BOLD | MAC_ITALIC)),
+        ],
+    );
+    assert_eq!((face.weight, face.style), (Weight::NORMAL, Style::Normal));
+}
+
+/// An `OS/2` table that cannot be used declares nothing, so `head` speaks
+/// for the face as it does when there is no `OS/2` table.
+#[test]
+fn mac_style_is_read_when_os2_cannot_be_used() {
+    let face = styled_face(
+        "Regular",
+        &[
+            (b"OS/2", os2_table(6, 100, 300, 5, 0)),
+            (b"head", head_table(MAC_BOLD | MAC_ITALIC)),
+        ],
+    );
+    assert_eq!((face.weight, face.style), (Weight::BOLD, Style::Italic));
+}
+
+#[test]
+fn a_head_table_too_short_for_mac_style_flags_nothing() {
+    let mut head = head_table(MAC_BOLD | MAC_ITALIC);
+    head.truncate(45);
+    let face = styled_face("Regular", &[(b"head", head)]);
+    assert_eq!((face.weight, face.style), (Weight::NORMAL, Style::Normal));
+}
+
+/// The word Bold makes a face bold only when the tables leave it at 400,
+/// and only as a whole word.
+#[test]
+fn the_word_bold_in_the_subfamily_makes_a_normal_weight_bold() {
+    // (declared weight class, subfamily, weight)
+    let cases = [
+        (400, "Bold", 700),
+        (400, "bold italic", 700),
+        (400, "Semi-Bold", 700),
+        (0, "Bold", 700),
+        (400, "Semibold", 400),
+        (400, "Bolder", 400),
+        (400, "Regular", 400),
+        (400, "", 400),
+        (500, "Bold", 500),
+        (300, "Bold", 300),
+    ];
+    for (declared, subfamily, weight) in cases {
+        let face = styled_face(subfamily, &[(b"OS/2", os2_weighing(declared, 0))]);
+        assert_eq!(
+            face.weight,
+            Weight(weight),
+            "weight class {declared}, subfamily {subfamily:?}"
+        );
+    }
+}
+
+#[test]
+fn the_word_bold_makes_a_face_without_os2_bold() {
+    assert_eq!(styled_face("Bold", &[]).weight, Weight::BOLD);
+    assert_eq!(styled_face("Regular", &[]).weight, Weight::NORMAL);
+}
+
+/// The words Italic and Oblique give a face its style only when the tables
+/// leave it normal.
+#[test]
+fn the_words_italic_and_oblique_in_the_subfamily_give_a_normal_face_its_style() {
+    // (fsSelection, subfamily, style)
+    let cases = [
+        (0, "Italic", Style::Italic),
+        (0, "Thin ITALIC", Style::Italic),
+        (0, "Oblique", Style::Oblique),
+        (0, "Bold Oblique", Style::Oblique),
+        (0, "Italic Oblique", Style::Italic),
+        (0, "Italics", Style::Normal),
+        (0, "Regular", Style::Normal),
+        (SELECTION_OBLIQUE, "Italic", Style::Oblique),
+        (SELECTION_ITALIC, "Oblique", Style::Italic),
+    ];
+    for (selection, subfamily, style) in cases {
+        let face = styled_face(subfamily, &[(b"OS/2", os2_weighing(400, selection))]);
+        assert_eq!(
+            face.style, style,
+            "fsSelection {selection}, subfamily {subfamily:?}"
+        );
+    }
+}
+
+/// Of two English subfamily names the Unicode one is read, whichever comes
+/// first in the table.
+#[test]
+fn the_words_are_read_from_a_unicode_subfamily_ahead_of_a_macintosh_roman_one() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        macintosh(MACINTOSH_ENGLISH, SUBFAMILY, "Bold"),
+        english(SUBFAMILY, "Regular"),
+    ])
+    .unwrap();
+    assert_eq!(face.weight, Weight::NORMAL);
+}
+
+#[test]
+fn the_words_are_read_from_a_macintosh_roman_subfamily_when_it_is_the_english_one() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        french(SUBFAMILY, "Gras"),
+        macintosh(MACINTOSH_ENGLISH, SUBFAMILY, "Bold"),
+    ])
+    .unwrap();
+    assert_eq!(face.weight, Weight::BOLD);
+}
+
+#[test]
+fn the_words_are_not_read_from_a_subfamily_in_an_encoding_that_is_not_decoded() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        (MACINTOSH, MACINTOSH_JAPANESE, 0, SUBFAMILY, "Bold"),
+    ])
+    .unwrap();
+    assert_eq!(face.weight, Weight::NORMAL);
+}
+
+/// An italic angle in `post` is read before the subfamily's words.
+#[test]
+fn an_italic_angle_makes_a_face_named_oblique_italic() {
+    let face = styled_face("Oblique", &[(b"post", post_table(0xFFF4_0000, 0))]);
+    assert_eq!(face.style, Style::Italic);
+}
+
+/// The words are looked for in the typographic subfamily when the font has
+/// one, in its English name.
+#[test]
+fn the_words_are_read_from_the_typographic_subfamily() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        english(SUBFAMILY, "Bold Italic"),
+        french(TYPOGRAPHIC_SUBFAMILY, "Bold"),
+        english(TYPOGRAPHIC_SUBFAMILY, "Light Oblique"),
+    ])
+    .unwrap();
+    assert_eq!((face.weight, face.style), (Weight::NORMAL, Style::Oblique));
+}
+
+#[test]
+fn the_words_are_read_from_the_english_subfamily() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        french(SUBFAMILY, "Gras"),
+        english(SUBFAMILY, "Bold"),
+    ])
+    .unwrap();
+    assert_eq!(face.weight, Weight::BOLD);
 }

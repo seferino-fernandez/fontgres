@@ -30,8 +30,7 @@ pub struct Face {
     pub post_script_name: String,
     /// Normal, italic or oblique.
     pub style: Style,
-    /// CSS weight as the font declares it, normally 1 to 1000; 400 is normal
-    /// and 700 bold.
+    /// CSS weight, from 1 to 1000; 400 is normal and 700 bold.
     pub weight: u16,
     /// CSS stretch, from `ultra-condensed` to `ultra-expanded`.
     pub stretch: Stretch,

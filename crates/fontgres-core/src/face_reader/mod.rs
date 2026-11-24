@@ -16,7 +16,7 @@ use alloc::{string::String, vec::Vec};
 pub use ttf_parser::{Language, Width as Stretch};
 
 use crate::{FontLoadFailureReason, Style, Weight};
-use ttf_parser::{RawFace, Tag};
+use ttf_parser::{MacStyle, RawFace, Tag, os2};
 
 /// What a font's tables say about one face.
 #[derive(Debug)]
@@ -43,52 +43,101 @@ pub(crate) fn face_count(data: &[u8]) -> u32 {
 ///
 /// A font that is not a collection has one face, at index 0.
 ///
+/// The `OS/2` table declares the weight, style and stretch. A face without
+/// one that can be used takes bold and italic from the `macStyle` flags of
+/// its `head` table. A face those leave at normal weight or normal style
+/// takes them from the words Bold, Italic and Oblique in its subfamily name.
+///
 /// # Errors
 ///
 /// [`FontLoadFailureReason::MalformedFont`] when the data is not a font or
 /// holds no face at `index`, and [`FontLoadFailureReason::NoFamilyName`]
 /// when the face has no family name that can be read.
 pub(crate) fn read(data: &[u8], index: u32) -> Result<FaceProperties, FontLoadFailureReason> {
+    const OS2_TAG: Tag = Tag::from_bytes(*b"OS/2");
+    const HEAD_TAG: Tag = Tag::from_bytes(*b"head");
+
     let raw_face =
         RawFace::parse(data, index).map_err(|_cause| FontLoadFailureReason::MalformedFont)?;
-    let (families, post_script_name) =
-        names::read(&raw_face).ok_or(FontLoadFailureReason::NoFamilyName)?;
-    let (mut style, weight, stretch) = parse_os2(&raw_face);
-    let (monospaced, italic) = parse_post(&raw_face);
-
-    if style == Style::Normal && italic {
-        style = Style::Italic;
-    }
+    let names = names::read(&raw_face).ok_or(FontLoadFailureReason::NoFamilyName)?;
+    let os2 = raw_face.table(OS2_TAG).and_then(os2::Table::parse);
+    let (monospaced, slanted) = parse_post(&raw_face);
+    // `head` speaks only for a face `OS/2` says nothing about.
+    let mac_style = match os2 {
+        Some(_) => MacStyle::default(),
+        None => raw_face
+            .table(HEAD_TAG)
+            .and_then(MacStyle::parse)
+            .unwrap_or_default(),
+    };
 
     Ok(FaceProperties {
-        families,
-        post_script_name,
-        style,
-        weight,
-        stretch,
+        style: style(os2, slanted, mac_style, &names.subfamily),
+        weight: weight(os2, mac_style, &names.subfamily),
+        stretch: os2.map_or(Stretch::Normal, |table| table.width()),
         monospaced,
+        families: names.families,
+        post_script_name: names.post_script_name,
     })
 }
 
-fn parse_os2(raw_face: &RawFace<'_>) -> (Style, Weight, Stretch) {
-    const OS2_TAG: Tag = Tag::from_bytes(*b"OS/2");
-    let Some(table) = raw_face
-        .table(OS2_TAG)
-        .and_then(ttf_parser::os2::Table::parse)
-    else {
-        return (Style::Normal, Weight::NORMAL, Stretch::Normal);
+/// Returns the face's weight: what `OS/2` declares, else bold when
+/// `mac_style` flags it. A face that leaves at normal weight is bold when
+/// its `subfamily` name has the word Bold.
+fn weight(os2: Option<os2::Table<'_>>, mac_style: MacStyle, subfamily: &str) -> Weight {
+    let declared = match os2 {
+        Some(table) => declared_weight(table.weight_class()),
+        None if mac_style.bold() => Weight::BOLD,
+        None => Weight::NORMAL,
     };
+    if declared == Weight::NORMAL && has_word(subfamily, "bold") {
+        Weight::BOLD
+    } else {
+        declared
+    }
+}
 
-    let style = match table.style() {
-        ttf_parser::Style::Normal => Style::Normal,
-        ttf_parser::Style::Italic => Style::Italic,
-        ttf_parser::Style::Oblique => Style::Oblique,
-    };
+/// Returns the weight a `usWeightClass` of `class` stands for.
+///
+/// The format allows 1 to 1000. A class of 0 declares no weight, so the face
+/// is of normal weight, and a class above 1000 is the heaviest weight.
+fn declared_weight(class: u16) -> Weight {
+    const HEAVIEST: u16 = 1000;
 
-    let weight = table.weight();
-    let stretch = table.width();
+    if class == 0 {
+        Weight::NORMAL
+    } else {
+        Weight(class.min(HEAVIEST))
+    }
+}
 
-    (style, Weight(weight.to_number()), stretch)
+/// Returns the face's style: what `OS/2` declares, else italic when `post`
+/// gives an italic angle (`slanted`) or `mac_style` flags it. A face those
+/// leave normal is italic or oblique when its `subfamily` name has that word.
+fn style(
+    os2: Option<os2::Table<'_>>,
+    slanted: bool,
+    mac_style: MacStyle,
+    subfamily: &str,
+) -> Style {
+    let declared = os2.map_or(Style::Normal, |table| table.style());
+    if declared != Style::Normal {
+        declared
+    } else if slanted || mac_style.italic() || has_word(subfamily, "italic") {
+        Style::Italic
+    } else if has_word(subfamily, "oblique") {
+        Style::Oblique
+    } else {
+        Style::Normal
+    }
+}
+
+/// Returns whether `word` is one of the words of `name`, ignoring ASCII
+/// case. A word is a run of letters and digits, so `Semibold` does not have
+/// the word `bold` and `Semi Bold` does.
+fn has_word(name: &str, word: &str) -> bool {
+    name.split(|c: char| !c.is_alphanumeric())
+        .any(|part| part.eq_ignore_ascii_case(word))
 }
 
 /// Returns whether the `post` table declares the face monospaced, and whether

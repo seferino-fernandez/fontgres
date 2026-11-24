@@ -926,14 +926,20 @@ pub struct FaceInfo {
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub post_script_name: String,
 
-    /// The face's style.
+    /// The face's style, as its `OS/2` table declares it.
     ///
-    /// A face whose `OS/2` table declares it normal but whose `post` table
-    /// gives an italic angle is [`Style::Italic`].
+    /// A face that table leaves normal is [`Style::Italic`] when its `post`
+    /// table gives an italic angle, and takes the style its subfamily name
+    /// has as a word, Italic or Oblique. A face without an `OS/2` table is
+    /// also italic when its `head` table flags it.
     pub style: Style,
 
-    /// The face's weight, as its `OS/2` table declares it, or
-    /// [`Weight::NORMAL`] when it has none.
+    /// The face's weight, as its `OS/2` table declares it, from 1 to 1000.
+    ///
+    /// A declared 0 is [`Weight::NORMAL`] and a weight above 1000 is 1000. A
+    /// face without an `OS/2` table is [`Weight::BOLD`] when its `head`
+    /// table flags it bold, and normal otherwise. A face that leaves at
+    /// normal weight is bold when its subfamily name has the word Bold.
     pub weight: Weight,
 
     /// The face's stretch, as its `OS/2` table declares it, or

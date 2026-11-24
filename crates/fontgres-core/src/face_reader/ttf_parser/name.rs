@@ -7,8 +7,10 @@ use super::parser::{FromData, LazyArray16, Offset, Offset16, Stream};
 /// A list of [name ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids)'s.
 pub(crate) mod name_id {
     pub(crate) const FAMILY: u16 = 1;
+    pub(crate) const SUBFAMILY: u16 = 2;
     pub(crate) const POST_SCRIPT_NAME: u16 = 6;
     pub(crate) const TYPOGRAPHIC_FAMILY: u16 = 16;
+    pub(crate) const TYPOGRAPHIC_SUBFAMILY: u16 = 17;
 }
 
 /// A [platform ID](https://docs.microsoft.com/en-us/typography/opentype/spec/name#platform-ids).

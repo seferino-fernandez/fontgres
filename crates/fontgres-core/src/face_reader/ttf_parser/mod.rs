@@ -3,17 +3,19 @@ A minimal subset of [ttf-parser](https://github.com/harfbuzz/ttf-parser),
 inlined from ttf-parser 0.25.1 (MIT / Apache-2.0).
 
 Contains just enough of the original crate to parse font table records,
-the `name` table and parts of the `OS/2` table.
+the `name` table and parts of the `OS/2` table. The `head` module is not
+from ttf-parser.
 */
 
+mod head;
 mod language;
 pub(crate) mod name;
 pub(crate) mod os2;
 mod parser;
 
+pub(crate) use head::MacStyle;
 pub use language::Language;
 pub(crate) use name::{PlatformId, name_id};
-pub(crate) use os2::Style;
 pub use os2::Width;
 pub(crate) use parser::LazyArray16;
 
