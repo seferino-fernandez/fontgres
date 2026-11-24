@@ -20,7 +20,7 @@ fn main() {
 
     let mut db = fontdb::Database::new();
     let load_start = std::time::Instant::now();
-    db.load_system_fonts();
+    let report = db.load_system_fonts();
     db.set_serif_family("Times New Roman");
     db.set_sans_serif_family("Arial");
     db.set_cursive_family("Comic Sans MS");
@@ -31,6 +31,9 @@ fn main() {
         db.len(),
         load_start.elapsed().as_millis()
     );
+    for failure in report.failures() {
+        println!("Warning: {failure}.");
+    }
 
     let query = fontdb::Query {
         families: &[fontdb::Family::Name(FAMILY_NAME), fontdb::Family::SansSerif],

@@ -28,11 +28,15 @@ pub enum Error {
     #[error("I/O error")]
     Io(#[from] std::io::Error),
 
-    /// A configured font directory does not exist.
-    #[error("font directory {} does not exist", .path.display())]
-    FontDirNotFound {
-        /// The directory that does not exist.
+    /// A configured font directory cannot be read: it does not exist, is not
+    /// a directory, or may not be listed.
+    #[error("cannot read font directory {}", .path.display())]
+    FontDir {
+        /// The directory that cannot be read.
         path: PathBuf,
+        /// Why it cannot be read.
+        #[source]
+        source: std::io::Error,
     },
 
     /// A configured font file cannot be read.
@@ -43,6 +47,20 @@ pub enum Error {
         /// Why it cannot be read.
         #[source]
         source: std::io::Error,
+    },
+
+    /// A configured font file was read and gave no face.
+    #[error(
+        "no font faces in {}{}",
+        .path.display(),
+        .reason.as_ref().map_or_default(|reason| format!(": {reason}"))
+    )]
+    NoFaces {
+        /// The file that gave no face.
+        path: PathBuf,
+        /// Why its first face did not load; `None` when the file holds no
+        /// face at all.
+        reason: Option<crate::FontLoadFailureReason>,
     },
 }
 
@@ -171,6 +189,31 @@ mod tests {
             reason: "invalid digit".to_string(),
         });
         assert_eq!(chain_text(&config).matches("invalid digit").count(), 1);
+    }
+
+    #[test]
+    fn font_errors_name_the_path_and_keep_the_cause_for_the_chain() {
+        let dir = Error::FontDir {
+            path: PathBuf::from("/fonts/missing"),
+            source: io::Error::new(io::ErrorKind::NotFound, "no such directory"),
+        };
+        assert_eq!(dir.to_string(), "cannot read font directory /fonts/missing");
+        assert_eq!(
+            chain_text(&dir),
+            "cannot read font directory /fonts/missing: no such directory"
+        );
+
+        let path = PathBuf::from("/fonts/notes.ttf");
+        let not_a_font = Error::NoFaces {
+            path: path.clone(),
+            reason: Some(crate::FontLoadFailureReason::MalformedFont),
+        };
+        assert_eq!(
+            chain_text(&not_a_font),
+            "no font faces in /fonts/notes.ttf: malformed font"
+        );
+        let empty = Error::NoFaces { path, reason: None };
+        assert_eq!(chain_text(&empty), "no font faces in /fonts/notes.ttf");
     }
 
     #[test]

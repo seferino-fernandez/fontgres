@@ -31,7 +31,8 @@
 //!
 //! # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
 //! let mut db = Database::new();
-//! db.load_font_data(std::fs::read(path)?);
+//! let report = db.load_font_data(std::fs::read(path)?);
+//! assert!(report.failures().is_empty());
 //!
 //! let query = Query {
 //!     families: &[Family::Name("Tuffy"), Family::SansSerif],
@@ -65,10 +66,16 @@
 //! - `schema`: derives `schemars::JsonSchema` on the `models` views. Implies
 //!   `cli`.
 //!
-//! # Logging
+//! # Failures and logging
 //!
-//! A face that fails to parse is skipped, and the reason is logged as a
-//! warning through the [`log`](https://docs.rs/log) crate.
+//! One bad font does not fail a load. A font file that cannot be read, and a
+//! face that fails to parse, is skipped and listed in the [`FontLoadReport`]
+//! the load returns, with the reason. The crate does not log them.
+//!
+//! Through the [`log`](https://docs.rs/log) crate it logs only what is not a
+//! font's failure: a warning when fontconfig's configuration lists no
+//! directory, so the fixed directories load instead, and at debug level a
+//! fontconfig file it skipped and a file it could not mark for random access.
 //!
 //! # Memory-mapped files
 //!
@@ -113,8 +120,6 @@ use alloc::{
 pub use ttf_parser::Language;
 pub use ttf_parser::Width as Stretch;
 
-use tinyvec::TinyVec;
-
 /// Identifies a face within one [`Database`]: the face's position in the
 /// database's load order.
 ///
@@ -128,8 +133,8 @@ use tinyvec::TinyVec;
 /// the same position, an unrelated face; keeping IDs with their database is
 /// up to the caller.
 ///
-/// The default ID is [`ID::dummy`]. `Display` writes unequal IDs as different
-/// strings; the format is not otherwise specified.
+/// `Display` writes unequal IDs as different strings; the format is not
+/// otherwise specified.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Debug)]
 pub struct ID(usize);
 
@@ -146,48 +151,172 @@ impl ID {
     }
 }
 
-impl Default for ID {
-    fn default() -> Self {
-        Self::dummy()
-    }
-}
-
 impl core::fmt::Display for ID {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-/// A list of possible font loading errors.
+/// What one load did: the faces it added, the font files it skipped, and
+/// what it could not load.
+///
+/// Every `load_*` method of [`Database`] returns one. A load reports its
+/// failures only here, so a caller that drops the report never learns of
+/// them.
+///
+/// # Examples
+///
+/// ```
+/// use fontgres_core::{Database, FontLoadFailureReason};
+///
+/// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+/// let mut db = Database::new();
+/// let report = db.load_font_data(std::fs::read(path)?);
+/// assert_eq!(report.added().len(), 1);
+/// assert!(report.failures().is_empty());
+///
+/// let report = db.load_font_data(b"not a font".to_vec());
+/// assert_eq!(report.added().len(), 0);
+/// let [failure] = report.failures() else { panic!("one face fails") };
+/// assert!(matches!(failure.reason, FontLoadFailureReason::MalformedFont));
+/// assert_eq!(failure.to_string(), "cannot load face 0: malformed font");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
-enum LoadError {
-    /// A malformed font.
-    ///
-    /// Typically means that [ttf-parser](https://github.com/harfbuzz/ttf-parser)
-    /// wasn't able to parse it.
-    MalformedFont,
-    /// A valid TrueType font without a valid *Family Name*.
-    UnnamedFont,
-    /// A file IO related error.
-    #[cfg(feature = "std")]
-    IoError(std::io::Error),
+#[must_use = "a load reports the fonts it could not load only here"]
+pub struct FontLoadReport {
+    /// The positions in load order of the faces the load added.
+    added: core::ops::Range<usize>,
+    skipped: usize,
+    failures: Vec<FontLoadFailure>,
 }
 
-#[cfg(feature = "std")]
-impl From<std::io::Error> for LoadError {
-    #[inline]
-    fn from(e: std::io::Error) -> Self {
-        LoadError::IoError(e)
+impl FontLoadReport {
+    /// Returns the IDs of the faces the load added, in load order.
+    ///
+    /// The IDs are consecutive: no other face sits between two faces of one
+    /// load.
+    pub fn added(&self) -> impl DoubleEndedIterator<Item = ID> + ExactSizeIterator + use<> {
+        self.added.clone().map(ID)
+    }
+
+    /// Returns how many font files the load reached and skipped as already
+    /// loaded.
+    ///
+    /// Only the file-system loads skip files; [`Database`] documents which.
+    /// A load from memory always returns zero.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Returns each font file and face the load could not add, in the order
+    /// the load reached them.
+    pub fn failures(&self) -> &[FontLoadFailure] {
+        &self.failures
+    }
+
+    /// Returns the failures by value, as [`failures`](Self::failures) orders
+    /// them.
+    pub fn into_failures(self) -> Vec<FontLoadFailure> {
+        self.failures
     }
 }
 
-impl core::fmt::Display for LoadError {
+/// One font file, or one face of a font, that a load could not add; part of
+/// a [`FontLoadReport`].
+///
+/// `Display` writes the failure on one line, naming the face, the file and
+/// the reason, such as `cannot load face 2 of /fonts/a.ttc: malformed font`.
+///
+/// The struct is non-exhaustive: read its fields, and expect more in later
+/// versions.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FontLoadFailure {
+    /// The font file that failed, or that holds the face that failed; `None`
+    /// when the font was loaded from memory.
+    #[cfg(feature = "fs")]
+    pub path: Option<std::path::PathBuf>,
+
+    /// The index of the face that failed within its font; `None` when the
+    /// file could not be read, so none of its faces was tried.
+    pub face_index: Option<u32>,
+
+    /// Why it did not load.
+    pub reason: FontLoadFailureReason,
+}
+
+impl FontLoadFailure {
+    /// The failure of the face at `index` of the font at `source`.
+    fn of_face(source: &Source, index: u32, reason: FontLoadFailureReason) -> Self {
+        match source {
+            Source::Binary(_) => Self {
+                #[cfg(feature = "fs")]
+                path: None,
+                face_index: Some(index),
+                reason,
+            },
+            #[cfg(feature = "fs")]
+            Source::File(path) => Self {
+                path: Some(path.to_path_buf()),
+                face_index: Some(index),
+                reason,
+            },
+        }
+    }
+
+    /// The failure of the font file at `path`, which cannot be read.
+    #[cfg(feature = "fs")]
+    fn of_file(path: &std::path::Path, error: std::io::Error) -> Self {
+        Self {
+            path: Some(path.to_path_buf()),
+            face_index: None,
+            reason: FontLoadFailureReason::UnreadableFile(error),
+        }
+    }
+}
+
+impl core::fmt::Display for FontLoadFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.face_index {
+            Some(index) => write!(f, "cannot load face {index}")?,
+            None => f.write_str("cannot load font file")?,
+        }
+        #[cfg(feature = "fs")]
+        if let Some(path) = &self.path {
+            let of = if self.face_index.is_some() { " of" } else { "" };
+            write!(f, "{of} {}", path.display())?;
+        }
+        write!(f, ": {}", self.reason)
+    }
+}
+
+/// Why a font file or one of its faces did not load.
+///
+/// The enum is non-exhaustive, so callers should include a fallback match arm.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum FontLoadFailureReason {
+    /// The file cannot be opened or read, or, with the `memmap` feature,
+    /// cannot be memory-mapped. `Display` writes the I/O error.
+    #[cfg(feature = "fs")]
+    UnreadableFile(std::io::Error),
+
+    /// The data is not a TrueType or OpenType font, or the part of it that
+    /// lists the face's tables is damaged.
+    MalformedFont,
+
+    /// The face has no family name the database can read.
+    NoFamilyName,
+}
+
+impl core::fmt::Display for FontLoadFailureReason {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            LoadError::MalformedFont => write!(f, "malformed font"),
-            LoadError::UnnamedFont => write!(f, "font doesn't have a family name"),
-            #[cfg(feature = "std")]
-            LoadError::IoError(e) => write!(f, "{e}"),
+            #[cfg(feature = "fs")]
+            Self::UnreadableFile(error) => write!(f, "{error}"),
+            Self::MalformedFont => f.write_str("malformed font"),
+            Self::NoFamilyName => f.write_str("font doesn't have a family name"),
         }
     }
 }
@@ -212,13 +341,27 @@ impl core::fmt::Display for LoadError {
 /// # Font files
 ///
 /// The file-system loads ([`load_fonts_dir`], [`load_system_fonts`] and
-/// [`load_font_file`]) load each font file once per database: the database
-/// remembers each font file they reach, by canonical path, and skips it on any
-/// later load. The directory and system loads remember a file even when it
-/// fails to read or parse; [`load_font_file`] remembers it only once it reads,
-/// so a failed call can be retried. Copies of a font and hard links to it are
-/// different files and each load. A clone remembers what the original loaded;
-/// to load files again, use a new database.
+/// [`load_font_file`]) load each font file once per database. The database
+/// remembers each font file they reach, by canonical path, and whether it gave
+/// a face:
+///
+/// - A file that gave a face is skipped by every later load.
+/// - A file that gave none, because it could not be read or none of its faces
+///   parsed, is skipped by the directory and system loads, so loading a
+///   directory again does not read its broken files again. [`load_font_file`]
+///   reads it again, since its caller asked for that file and should learn why
+///   it gives no face.
+///
+/// Copies of a font and hard links to it are different files and each load. A
+/// clone remembers what the original loaded; to load files again, use a new
+/// database.
+///
+/// # Failures
+///
+/// Every load returns a [`FontLoadReport`]: the faces it added, how many font
+/// files it skipped as already loaded, and each file or face it could not
+/// load, with the reason. A load neither logs these failures nor stops at
+/// one; the report is the only place they appear.
 ///
 /// [`load_fonts_dir`]: Database::load_fonts_dir
 /// [`load_system_fonts`]: Database::load_system_fonts
@@ -237,11 +380,11 @@ pub struct Database {
     family_cursive: String,
     family_fantasy: String,
     family_monospace: String,
-    /// The canonical paths of every font file a directory or system walk
-    /// reached, including those that failed to read or parse, and of every
-    /// file [`Database::load_font_file`] read.
+    /// The canonical path of every font file a file-system load reached,
+    /// with whether the file gave a face. [`Database::load_font_file`]
+    /// leaves out a file it could not read.
     #[cfg(feature = "fs")]
-    loaded_files: std::collections::HashSet<std::path::PathBuf>,
+    loaded_files: std::collections::HashMap<std::path::PathBuf, bool>,
 }
 
 impl Default for Database {
@@ -273,26 +416,25 @@ impl Database {
             family_fantasy: "Papyrus".to_string(),
             family_monospace: "Courier New".to_string(),
             #[cfg(feature = "fs")]
-            loaded_files: std::collections::HashSet::new(),
+            loaded_files: std::collections::HashMap::new(),
         }
     }
 
     /// Loads every face in the font held in `data`.
     ///
     /// A collection adds one face per font it contains. A face that fails to
-    /// parse is skipped and logged as a warning, so data that is not a font
-    /// adds nothing. Use [`load_font_source`](Database::load_font_source) to
-    /// learn which faces were added.
-    pub fn load_font_data(&mut self, data: Vec<u8>) {
-        self.load_font_source(&Source::Binary(alloc::sync::Arc::new(data)));
+    /// parse is skipped and listed in the report's failures, so data that is
+    /// not a font adds nothing and reports one failure.
+    pub fn load_font_data(&mut self, data: Vec<u8>) -> FontLoadReport {
+        self.load_font_source(&Source::Binary(alloc::sync::Arc::new(data)))
     }
 
-    /// Loads every face in the font at `source` and returns the IDs of the
-    /// faces added.
+    /// Loads every face in the font at `source`.
     ///
     /// A collection adds one face per font it contains. A face that fails to
-    /// parse is skipped and logged as a warning. The result is empty when no
-    /// face parses, or when `source` is a file that cannot be read.
+    /// parse is skipped and listed in the report's failures, as is a
+    /// [`Source::File`] that cannot be read. A file loaded this way is not
+    /// remembered, so it loads again on every call.
     ///
     /// # Examples
     ///
@@ -302,65 +444,83 @@ impl Database {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// let ids = db.load_font_source(&Source::Binary(Arc::new(std::fs::read(path)?)));
+    /// let report = db.load_font_source(&Source::Binary(Arc::new(std::fs::read(path)?)));
+    /// let ids: Vec<_> = report.added().collect();
     /// assert_eq!(ids.len(), 1);
     /// assert_eq!(db.face(ids[0]).map(|face| face.index), Some(0));
-    ///
-    /// assert!(db.load_font_source(&Source::Binary(Arc::new(b"not a font".to_vec()))).is_empty());
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn load_font_source(&mut self, source: &Source) -> TinyVec<[ID; 8]> {
-        let ids = source.with_data(|data| {
-            let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
-            let mut ids = TinyVec::with_capacity(n as usize);
-
-            for index in 0..n {
-                match parse_face_info(source.clone(), data, index) {
-                    Ok(info) => ids.push(self.push_face_info(info)),
-                    Err(e) => {
-                        log::warn!("Failed to load a font face {index} from source cause {e}.");
-                    }
-                }
+    pub fn load_font_source(&mut self, source: &Source) -> FontLoadReport {
+        let start = self.faces.len();
+        let mut failures = Vec::new();
+        match source {
+            Source::Binary(data) => {
+                let faces = parse_faces(source, data.as_ref().as_ref());
+                self.push_parsed_faces(faces, &mut failures);
             }
-
-            ids
-        });
-
-        ids.unwrap_or_default()
+            #[cfg(feature = "fs")]
+            Source::File(path) => match with_file_data(path, |data| parse_faces(source, data)) {
+                Ok(faces) => self.push_parsed_faces(faces, &mut failures),
+                Err(error) => failures.push(FontLoadFailure::of_file(path, error)),
+            },
+        }
+        self.report_since(start, 0, failures)
     }
 
-    /// Adds the faces [`parse_font_file`] parsed from `path`, and logs the
-    /// ones that failed to parse.
-    #[cfg(feature = "fs")]
+    /// The report of a load that began when the database held `start` faces.
+    fn report_since(
+        &self,
+        start: usize,
+        skipped: usize,
+        failures: Vec<FontLoadFailure>,
+    ) -> FontLoadReport {
+        FontLoadReport {
+            added: start..self.faces.len(),
+            skipped,
+            failures,
+        }
+    }
+
+    /// Adds the faces of one font that parsed, in order, and moves the
+    /// failures of the others to `failures`.
     fn push_parsed_faces(
         &mut self,
-        path: &std::path::Path,
-        faces: Vec<Result<FaceInfo, LoadError>>,
+        faces: Vec<Result<FaceInfo, FontLoadFailure>>,
+        failures: &mut Vec<FontLoadFailure>,
     ) {
-        for (index, face) in faces.into_iter().enumerate() {
+        for face in faces {
             match face {
                 Ok(info) => {
                     self.push_face_info(info);
                 }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load a font face {} from '{}' cause {}.",
-                        index,
-                        path.display(),
-                        e
-                    );
-                }
+                Err(failure) => failures.push(failure),
             }
         }
+    }
+
+    /// Returns whether a load skips the font file at `canonical` as already
+    /// loaded.
+    ///
+    /// A file that gave a face is always skipped. A file that was reached and
+    /// gave none is skipped too, unless the caller `named` it: a walk passes
+    /// over the broken files it has met before, and a load of one file by its
+    /// path reads the file again to report why it gives no face.
+    #[cfg(feature = "fs")]
+    fn skips_font_file(&self, canonical: &std::path::Path, named: bool) -> bool {
+        self.loaded_files
+            .get(canonical)
+            .is_some_and(|&gave_a_face| gave_a_face || !named)
     }
 
     /// Loads every face in the font file at `path`.
     ///
     /// A collection adds one face per font it contains. A face that fails to
-    /// parse is skipped and logged as a warning, so a readable file that is not
-    /// a font returns `Ok` and adds nothing. A file this database already
-    /// loaded, by this or any other file-system load, returns `Ok` and adds
-    /// nothing.
+    /// parse is skipped and listed in the report's failures, so a readable
+    /// file that is not a font returns `Ok` with a failure and no face added.
+    ///
+    /// A file that already gave this database a face, by this or any other
+    /// file-system load, is skipped: the report counts it and adds nothing. A
+    /// file that an earlier load reached and got no face from is read again.
     ///
     /// # Errors
     ///
@@ -371,43 +531,61 @@ impl Database {
     pub fn load_font_file<P: AsRef<std::path::Path>>(
         &mut self,
         path: P,
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<FontLoadReport, std::io::Error> {
         self.load_font_file_impl(path.as_ref())
     }
 
     // A non-generic version.
     #[cfg(feature = "fs")]
-    fn load_font_file_impl(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+    fn load_font_file_impl(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<FontLoadReport, std::io::Error> {
+        let start = self.faces.len();
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        if self.loaded_files.contains(&canonical) {
-            return Ok(());
+        if self.skips_font_file(&canonical, true) {
+            return Ok(self.report_since(start, 1, Vec::new()));
         }
         let faces = parse_font_file(path)?;
-        self.loaded_files.insert(canonical);
-        self.push_parsed_faces(path, faces);
-        Ok(())
+        let mut failures = Vec::new();
+        self.push_parsed_faces(faces, &mut failures);
+        self.loaded_files
+            .insert(canonical, self.faces.len() > start);
+        Ok(self.report_since(start, 0, failures))
     }
 
     /// Adds the faces of `files` in the order of `files`, as loading them one
     /// by one would, after parsing them on several threads. A file this
-    /// database already loaded is skipped. A file that cannot be read is
-    /// skipped and logged as a warning.
+    /// database already reached, in an earlier load or earlier in `files`, is
+    /// skipped. A file that cannot be read is a failure in the report.
     #[cfg(feature = "fs")]
-    fn load_font_files(&mut self, files: Vec<FontFile>) {
-        let files: Vec<_> = files
-            .into_iter()
-            .filter_map(|file| {
-                self.loaded_files
-                    .insert(file.canonical)
-                    .then_some(file.path)
-            })
-            .collect();
-        for (path, parsed) in files.iter().zip(parse_font_files(&files)) {
-            match parsed {
-                Ok(faces) => self.push_parsed_faces(path, faces),
-                Err(e) => log::warn!("Failed to load '{}' cause {}.", path.display(), e),
+    fn load_font_files(&mut self, files: Vec<FontFile>) -> FontLoadReport {
+        let start = self.faces.len();
+        let reached = files.len();
+        let mut new = Vec::with_capacity(reached);
+        for file in files {
+            if !self.skips_font_file(&file.canonical, false) {
+                // Remembered before it is parsed, so a second path to the
+                // file later in `files` is skipped.
+                self.loaded_files.insert(file.canonical.clone(), false);
+                new.push(file);
             }
         }
+        let skipped = reached.saturating_sub(new.len());
+
+        let mut failures = Vec::new();
+        let parsed_files = parse_font_files(&new);
+        for (file, parsed) in new.into_iter().zip(parsed_files) {
+            let faces_before = self.faces.len();
+            match parsed {
+                Ok(faces) => self.push_parsed_faces(faces, &mut failures),
+                Err(error) => failures.push(FontLoadFailure::of_file(&file.path, error)),
+            }
+            if self.faces.len() > faces_before {
+                self.loaded_files.insert(file.canonical, true);
+            }
+        }
+        self.report_since(start, skipped, failures)
     }
 
     /// Loads every font file in `dir` and its subdirectories.
@@ -415,9 +593,10 @@ impl Database {
     /// Only files with a `ttf`, `otf`, `ttc` or `otc` extension, in any case,
     /// load. Symbolic links are followed, and a link loads when either its own
     /// name or its target's has such an extension. A file loads once however
-    /// many links lead to it, and a file this database already loaded, by this
-    /// or any other file-system load, is skipped. Loading a directory again
-    /// adds only the files added to it since.
+    /// many links lead to it, and a file this database already reached, by
+    /// this or any other file-system load, is skipped, whether or not it gave
+    /// a face. The report counts every path to a file that was skipped.
+    /// Loading a directory again adds only the files added to it since.
     ///
     /// The entries of each directory load in the order of their file names,
     /// compared as bytes, so `B.ttf` loads before `a.ttf`. Files, subdirectories
@@ -425,14 +604,23 @@ impl Database {
     /// fonts load where its name falls. The order does not depend on the file
     /// system, so the same fonts load in the same order on every machine.
     ///
-    /// Nothing here is an error. A directory that does not exist or cannot be
-    /// read adds nothing, silently. A file that cannot be read, and a face that
-    /// fails to parse, is skipped and logged as a warning.
+    /// A file that cannot be read, and a face that fails to parse, is skipped
+    /// and listed in the report's failures. A subdirectory that cannot be read
+    /// adds nothing and is not reported.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error when `dir` itself cannot be read: it does not
+    /// exist, is not a directory, or may not be listed. The database is
+    /// unchanged.
     #[cfg(feature = "fs")]
-    pub fn load_fonts_dir<P: AsRef<std::path::Path>>(&mut self, dir: P) {
+    pub fn load_fonts_dir<P: AsRef<std::path::Path>>(
+        &mut self,
+        dir: P,
+    ) -> Result<FontLoadReport, std::io::Error> {
         let mut walk = FontDirWalk::default();
-        walk.find_font_files(dir.as_ref());
-        self.load_font_files(walk.files);
+        walk.find_font_files_in_readable(dir.as_ref())?;
+        Ok(self.load_font_files(walk.files))
     }
 
     /// Loads the fonts installed on the system by scanning its font directories.
@@ -461,12 +649,16 @@ impl Database {
     /// here, or in the order fontconfig's configuration lists them, and each
     /// loads in the order [`load_fonts_dir`](Database::load_fonts_dir)
     /// documents; the downloadable font directories load in the order of their
-    /// names. Errors are handled as in
-    /// [`load_fonts_dir`](Database::load_fonts_dir).
+    /// names.
+    ///
+    /// Nothing here is an error: a directory that does not exist or cannot be
+    /// read adds nothing and is not reported. The report lists the files and
+    /// faces that failed and counts the files skipped, as the one
+    /// [`load_fonts_dir`](Database::load_fonts_dir) returns does.
     #[cfg(feature = "fs")]
-    pub fn load_system_fonts(&mut self) {
+    pub fn load_system_fonts(&mut self) -> FontLoadReport {
         #[cfg(target_os = "windows")]
-        {
+        let report = {
             let mut walk = FontDirWalk::default();
             if let Some(ref system_root) = std::env::var_os("SYSTEMROOT") {
                 let system_root_path = std::path::Path::new(system_root);
@@ -482,11 +674,11 @@ impl Database {
                     &home_path.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"),
                 );
             }
-            self.load_font_files(walk.files);
-        }
+            self.load_font_files(walk.files)
+        };
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
+        let report = {
             let mut walk = FontDirWalk::default();
             walk.find_font_files("/Library/Fonts".as_ref());
             walk.find_font_files("/System/Library/Fonts".as_ref());
@@ -514,25 +706,34 @@ impl Database {
                 let home_path = std::path::Path::new(home);
                 walk.find_font_files(&home_path.join("Library/Fonts"));
             }
-            self.load_font_files(walk.files);
-        }
+            self.load_font_files(walk.files)
+        };
 
         // Linux.
         #[cfg(all(
             unix,
+            feature = "fontconfig",
             not(any(target_os = "macos", target_os = "ios", target_os = "android"))
         ))]
-        {
-            #[cfg(feature = "fontconfig")]
-            {
-                self.load_fontconfig();
-            }
+        let report = self.load_fontconfig();
 
-            #[cfg(not(feature = "fontconfig"))]
-            {
-                self.load_no_fontconfig();
-            }
-        }
+        #[cfg(all(
+            unix,
+            not(feature = "fontconfig"),
+            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+        ))]
+        let report = self.load_no_fontconfig();
+
+        // A platform with no known font directories.
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            all(unix, not(target_os = "android"))
+        )))]
+        let report = self.report_since(self.faces.len(), 0, Vec::new());
+
+        report
     }
 
     // Linux.
@@ -541,7 +742,7 @@ impl Database {
         feature = "fs",
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
-    fn load_no_fontconfig(&mut self) {
+    fn load_no_fontconfig(&mut self) -> FontLoadReport {
         let mut walk = FontDirWalk::default();
         walk.find_font_files("/usr/share/fonts/".as_ref());
         walk.find_font_files("/usr/local/share/fonts/".as_ref());
@@ -551,7 +752,7 @@ impl Database {
             walk.find_font_files(&home_path.join(".fonts"));
             walk.find_font_files(&home_path.join(".local/share/fonts"));
         }
-        self.load_font_files(walk.files);
+        self.load_font_files(walk.files)
     }
 
     // Linux.
@@ -560,7 +761,7 @@ impl Database {
         feature = "fontconfig",
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
-    fn load_fontconfig(&mut self) {
+    fn load_fontconfig(&mut self) -> FontLoadReport {
         use std::path::Path;
 
         let mut fontconfig = fontconfig_parser::FontConfig::default();
@@ -592,9 +793,9 @@ impl Database {
             }
         }
 
-        if fontconfig.dirs.is_empty() {
+        let report = if fontconfig.dirs.is_empty() {
             log::warn!("Fallback to loading from known font dir paths.");
-            self.load_no_fontconfig();
+            self.load_no_fontconfig()
         } else {
             let mut walk = FontDirWalk::default();
             let home = home.as_ref().ok().map(Path::new);
@@ -604,12 +805,13 @@ impl Database {
             for path in dirs {
                 walk.find_font_files(&path);
             }
-            self.load_font_files(walk.files);
-        }
+            self.load_font_files(walk.files)
+        };
 
         // Generic families resolve after loading, so each can skip the
         // families fontconfig prefers that are not installed.
         self.set_generic_families_from_fontconfig(&fontconfig.aliases);
+        report
     }
 
     #[cfg(all(
@@ -750,7 +952,7 @@ impl Database {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// db.load_font_data(std::fs::read(path)?);
+    /// assert!(db.load_font_data(std::fs::read(path)?).failures().is_empty());
     ///
     /// let families = [Family::Name("Missing"), Family::Name("Tuffy")];
     /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
@@ -790,7 +992,7 @@ impl Database {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// db.load_font_data(std::fs::read(path)?);
+    /// assert!(db.load_font_data(std::fs::read(path)?).failures().is_empty());
     ///
     /// assert_eq!(db.family_faces("tuffy").count(), 1);
     /// assert_eq!(db.family_faces("Tuffy Sans").count(), 0);
@@ -827,7 +1029,7 @@ impl Database {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// db.load_font_data(std::fs::read(path)?);
+    /// assert!(db.load_font_data(std::fs::read(path)?).failures().is_empty());
     /// let id = db.faces().first().expect("Tuffy is loaded").id;
     ///
     /// let (magic, index) = db
@@ -923,7 +1125,7 @@ impl FaceInfo {
     ///
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
-    /// db.load_font_data(std::fs::read(path)?);
+    /// assert!(db.load_font_data(std::fs::read(path)?).failures().is_empty());
     /// let face = db.faces().first().expect("Tuffy is loaded");
     /// assert!(face.has_family("TUFFY"));
     /// assert!(!face.has_family("Tuffy Sans"));
@@ -1062,25 +1264,47 @@ struct FontDirWalk {
 impl FontDirWalk {
     /// Adds the font files in `dir` and its subdirectories, in the order
     /// [`load_fonts_dir`](Database::load_fonts_dir) documents, skipping each
-    /// directory the walk already reached by another path.
+    /// directory the walk already reached by another path. A `dir` that
+    /// cannot be read adds nothing.
     fn find_font_files(&mut self, dir: &std::path::Path) {
+        if let Some(canonical) = self.enter_root(dir) {
+            self.walk_dir(dir, &canonical);
+        }
+    }
+
+    /// Does what [`find_font_files`](Self::find_font_files) does, for a
+    /// `dir` the caller expects to read: returns the error that keeps it from
+    /// being read.
+    fn find_font_files_in_readable(&mut self, dir: &std::path::Path) -> std::io::Result<()> {
+        if let Some(canonical) = self.enter_root(dir) {
+            self.walk_entries(std::fs::read_dir(dir)?, &canonical);
+        }
+        Ok(())
+    }
+
+    /// Returns the canonical path of the root `dir`, or `None` when the walk
+    /// already reached that directory.
+    fn enter_root(&mut self, dir: &std::path::Path) -> Option<std::path::PathBuf> {
         // Canonicalizing the root once and joining each entry's name to it
         // gives every entry that is not a link its canonical path, so the walk
         // costs one canonicalization per root and per link, not per file. A
         // root that can be read but not canonicalized is still walked, under
         // the path it was given.
         let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        if self.dirs.insert(canonical.clone()) {
-            self.walk_dir(dir, &canonical);
+        self.dirs.insert(canonical.clone()).then_some(canonical)
+    }
+
+    /// Walks `dir`, whose canonical path is `canonical`. A directory that
+    /// cannot be read adds nothing.
+    fn walk_dir(&mut self, dir: &std::path::Path, canonical: &std::path::Path) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            self.walk_entries(entries, canonical);
         }
     }
 
-    /// Walks `dir`, whose canonical path is `canonical`. Files keep the path
-    /// they were found at.
-    fn walk_dir(&mut self, dir: &std::path::Path, canonical: &std::path::Path) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
+    /// Walks the `entries` of a directory whose canonical path is
+    /// `canonical`. Files keep the path they were found at.
+    fn walk_entries(&mut self, entries: std::fs::ReadDir, canonical: &std::path::Path) {
         // The file system's order is not the same on every machine, and load
         // order decides which of two equally good faces a query returns.
         let mut entries: Vec<_> = entries.flatten().collect();
@@ -1137,20 +1361,28 @@ impl FontDirWalk {
     }
 }
 
+/// Every face of a font, in index order: the face, or why it did not parse.
+type ParsedFaces = Vec<Result<FaceInfo, FontLoadFailure>>;
+
+/// Parses every face of the font in `data`, which `source` holds or locates.
+fn parse_faces(source: &Source, data: &[u8]) -> ParsedFaces {
+    let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
+    (0..n)
+        .map(|index| {
+            parse_face_info(source.clone(), data, index)
+                .map_err(|reason| FontLoadFailure::of_face(source, index, reason))
+        })
+        .collect()
+}
+
 /// Every face of a font file, or the error that kept the file from being read.
 #[cfg(feature = "fs")]
-type ParsedFontFile = Result<Vec<Result<FaceInfo, LoadError>>, std::io::Error>;
+type ParsedFontFile = Result<ParsedFaces, std::io::Error>;
 
-/// Parses every face of the font file at `path`, in index order.
+/// Parses every face of the font file at `path`.
 #[cfg(feature = "fs")]
 fn parse_font_file(path: &std::path::Path) -> ParsedFontFile {
-    with_file_data(path, |data| {
-        let source = Source::File(path.into());
-        let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
-        (0..n)
-            .map(|index| parse_face_info(source.clone(), data, index))
-            .collect()
-    })
+    with_file_data(path, |data| parse_faces(&Source::File(path.into()), data))
 }
 
 /// The most threads [`parse_font_files`] uses. Opening and mapping files
@@ -1170,7 +1402,7 @@ const MIN_FILES_PER_LOAD_THREAD: usize = 16;
 /// Opening and mapping a file costs more than parsing it, and the threads
 /// overlap that wait.
 #[cfg(feature = "fs")]
-fn parse_font_files(files: &[std::path::PathBuf]) -> Vec<ParsedFontFile> {
+fn parse_font_files(files: &[FontFile]) -> Vec<ParsedFontFile> {
     use core::sync::atomic::{AtomicUsize, Ordering};
 
     let threads = std::thread::available_parallelism()
@@ -1183,10 +1415,10 @@ fn parse_font_files(files: &[std::path::PathBuf]) -> Vec<ParsedFontFile> {
         let mut parsed = Vec::new();
         loop {
             let index = next.fetch_add(1, Ordering::Relaxed);
-            let Some(path) = files.get(index) else {
+            let Some(file) = files.get(index) else {
                 break parsed;
             };
-            parsed.push((index, parse_font_file(path)));
+            parsed.push((index, parse_font_file(&file.path)));
         }
     };
     let mut parsed = std::thread::scope(|scope| {
@@ -1239,10 +1471,10 @@ where
         // while the map is in use.
         // Not discharged: nothing here stops another process, another thread,
         // a `log` backend, or `f` from truncating or rewriting the file while
-        // the map is alive. `f` runs caller code: `Database::load_font_file`
-        // passes a parse that logs, and `Database::with_face_data` passes the
-        // caller's closure. The crate docs disclose this under "Memory-mapped
-        // files". The bound `F: FnOnce(&[u8]) -> T` keeps `f` from holding on
+        // the map is alive. Caller code runs while it is: the hint below can
+        // log, and `Database::with_face_data` passes the caller's closure as
+        // `f`. The loads pass a parse, which runs no caller code. The crate
+        // docs disclose this under "Memory-mapped files". The bound `F: FnOnce(&[u8]) -> T` keeps `f` from holding on
         // to the borrowed bytes, so the map drops when this function returns,
         // which ends the exposure.
         let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
@@ -1403,12 +1635,15 @@ impl Default for Style {
     }
 }
 
-fn parse_face_info(source: Source, data: &[u8], index: u32) -> Result<FaceInfo, LoadError> {
-    let raw_face = ttf_parser::RawFace::parse(data, index).map_err(|error| {
-        log::debug!("Face {index} does not parse: {error:?}.");
-        LoadError::MalformedFont
-    })?;
-    let (families, post_script_name) = parse_names(&raw_face).ok_or(LoadError::UnnamedFont)?;
+fn parse_face_info(
+    source: Source,
+    data: &[u8],
+    index: u32,
+) -> Result<FaceInfo, FontLoadFailureReason> {
+    let raw_face = ttf_parser::RawFace::parse(data, index)
+        .map_err(|_cause| FontLoadFailureReason::MalformedFont)?;
+    let (families, post_script_name) =
+        parse_names(&raw_face).ok_or(FontLoadFailureReason::NoFamilyName)?;
     let (mut style, weight, stretch) = parse_os2(&raw_face);
     let (monospaced, italic) = parse_post(&raw_face);
 

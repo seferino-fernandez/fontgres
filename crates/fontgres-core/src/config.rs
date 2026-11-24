@@ -90,7 +90,8 @@ pub struct FontsConfig {
     pub system: bool,
     /// Directories to scan recursively for font files.
     pub dirs: Vec<PathBuf>,
-    /// Individual font files to load.
+    /// Individual font files to load. Each must hold a font, unless an
+    /// earlier directory or file already loaded it.
     pub files: Vec<PathBuf>,
     /// Families that CSS generic family names resolve to.
     pub generic: GenericFamilies,

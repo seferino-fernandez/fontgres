@@ -9,10 +9,15 @@ use fontgres_core::Database;
 
 const TUFFY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
 
-fn faces_in(dir: &Path) -> usize {
+/// Loads `dir` into `database` and returns how many faces that added.
+fn load_dir(database: &mut Database, dir: &Path) -> std::io::Result<usize> {
+    Ok(database.load_fonts_dir(dir)?.added().len())
+}
+
+fn faces_in(dir: &Path) -> std::io::Result<usize> {
     let mut database = Database::new();
-    database.load_fonts_dir(dir);
-    database.len()
+    load_dir(&mut database, dir)?;
+    Ok(database.len())
 }
 
 #[test]
@@ -20,7 +25,7 @@ fn font_extensions_match_in_any_case() {
     for name in ["Tuffy.Otf", "Tuffy.TtF", "Tuffy.ttc", "Tuffy.OTC"] {
         let dir = tempfile::tempdir().unwrap();
         std::fs::copy(TUFFY, dir.path().join(name)).unwrap();
-        assert_eq!(faces_in(dir.path()), 1, "{name}");
+        assert_eq!(faces_in(dir.path()).unwrap(), 1, "{name}");
     }
 }
 
@@ -29,7 +34,7 @@ fn other_extensions_do_not_load() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(TUFFY, dir.path().join("Tuffy.woff2")).unwrap();
     std::fs::copy(TUFFY, dir.path().join("Tuffy")).unwrap();
-    assert_eq!(faces_in(dir.path()), 0);
+    assert_eq!(faces_in(dir.path()).unwrap(), 0);
 }
 
 /// The paths of the faces in `database`, in load order. A face that was not
@@ -69,10 +74,10 @@ fn dir_with_tuffy() -> std::io::Result<tempfile::TempDir> {
 }
 
 /// The paths `load_fonts_dir` loads from `dir`, in load order.
-fn paths_loaded_from(dir: &Path) -> Vec<std::path::PathBuf> {
+fn paths_loaded_from(dir: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut database = Database::new();
-    database.load_fonts_dir(dir);
-    loaded_paths(&database)
+    load_dir(&mut database, dir)?;
+    Ok(loaded_paths(&database))
 }
 
 /// A directory large enough to parse on several threads loads in the order
@@ -86,7 +91,7 @@ fn a_large_directory_loads_in_file_name_order() {
     std::fs::write(dir.path().join("Tuffy31a.ttf"), "not a font").unwrap();
 
     let expected: Vec<_> = (0..64).map(|index| dir.path().join(name(index))).collect();
-    assert_eq!(paths_loaded_from(dir.path()), expected);
+    assert_eq!(paths_loaded_from(dir.path()).unwrap(), expected);
 }
 
 /// Files and subdirectories sort together by name, compared as bytes, so an
@@ -98,7 +103,7 @@ fn files_and_subdirectories_load_in_one_file_name_order() {
 
     let expected =
         ["Z.ttf", "a.ttf", "b/y.ttf", "b/z.ttf", "c.ttf"].map(|name| dir.path().join(name));
-    assert_eq!(paths_loaded_from(dir.path()), expected);
+    assert_eq!(paths_loaded_from(dir.path()).unwrap(), expected);
 }
 
 /// Two files hold the same face, so a query for it is a tie, which the face
@@ -109,7 +114,7 @@ fn a_tie_between_two_files_goes_to_the_first_file_name() {
 
     let dir = dir_with_copies(["b.ttf", "a.ttf", "c.ttf"]).unwrap();
     let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
+    load_dir(&mut database, dir.path()).unwrap();
 
     let families = [Family::Name("Tuffy")];
     let query = Query {
@@ -127,8 +132,8 @@ fn a_tie_between_two_files_goes_to_the_first_file_name() {
 fn a_directory_loaded_twice_loads_its_fonts_once() {
     let dir = dir_with_tuffy().unwrap();
     let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
-    database.load_fonts_dir(dir.path());
+    load_dir(&mut database, dir.path()).unwrap();
+    load_dir(&mut database, dir.path()).unwrap();
     assert_eq!(database.len(), 1);
 }
 
@@ -137,7 +142,7 @@ fn a_directory_loaded_twice_loads_its_fonts_once() {
 fn a_file_source_debug_prints_its_path() {
     let dir = dir_with_tuffy().unwrap();
     let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
+    load_dir(&mut database, dir.path()).unwrap();
 
     let printed = format!("{:?}", database.faces()[0].source);
     assert_eq!(printed, format!("File({:?})", dir.path().join("Tuffy.ttf")));
@@ -150,13 +155,13 @@ fn a_font_file_loaded_with_its_directory_loads_once() {
     let font = dir.path().join("Tuffy.ttf");
 
     let mut dir_first = Database::new();
-    dir_first.load_fonts_dir(dir.path());
-    dir_first.load_font_file(&font).unwrap();
+    load_dir(&mut dir_first, dir.path()).unwrap();
+    assert_eq!(dir_first.load_font_file(&font).unwrap().skipped(), 1);
     assert_eq!(dir_first.len(), 1, "directory first");
 
     let mut file_first = Database::new();
-    file_first.load_font_file(&font).unwrap();
-    file_first.load_fonts_dir(dir.path());
+    assert_eq!(file_first.load_font_file(&font).unwrap().added().len(), 1);
+    load_dir(&mut file_first, dir.path()).unwrap();
     assert_eq!(file_first.len(), 1, "file first");
 }
 
@@ -164,15 +169,15 @@ fn a_font_file_loaded_with_its_directory_loads_once() {
 fn a_directory_loaded_again_loads_the_fonts_added_since() {
     let dir = dir_with_tuffy().unwrap();
     let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
+    load_dir(&mut database, dir.path()).unwrap();
     std::fs::copy(TUFFY, dir.path().join("Tuffy2.ttf")).unwrap();
-    database.load_fonts_dir(dir.path());
+    load_dir(&mut database, dir.path()).unwrap();
     assert_eq!(database.len(), 2);
 }
 
 #[cfg(unix)]
 mod symlinks {
-    use super::{TUFFY, faces_in, loaded_paths};
+    use super::{TUFFY, faces_in, load_dir, loaded_paths};
     use fontgres_core::Database;
     use std::os::unix::fs::symlink;
 
@@ -185,7 +190,7 @@ mod symlinks {
         let fonts = tempfile::tempdir().unwrap();
         symlink(&blob, fonts.path().join("Tuffy.ttf")).unwrap();
 
-        assert_eq!(faces_in(fonts.path()), 1);
+        assert_eq!(faces_in(fonts.path()).unwrap(), 1);
     }
 
     #[test]
@@ -196,7 +201,7 @@ mod symlinks {
         let fonts = tempfile::tempdir().unwrap();
         symlink(&target, fonts.path().join("0c4c8f45")).unwrap();
 
-        assert_eq!(faces_in(fonts.path()), 1);
+        assert_eq!(faces_in(fonts.path()).unwrap(), 1);
     }
 
     #[test]
@@ -207,7 +212,7 @@ mod symlinks {
         let fonts = tempfile::tempdir().unwrap();
         symlink(&blob, fonts.path().join("Tuffy")).unwrap();
 
-        assert_eq!(faces_in(fonts.path()), 0);
+        assert_eq!(faces_in(fonts.path()).unwrap(), 0);
     }
 
     /// Links the font in `real` from `link`, two sibling directories of one
@@ -219,7 +224,7 @@ mod symlinks {
         std::fs::create_dir(dir.path().join(link))?;
         std::fs::copy(TUFFY, &target)?;
         symlink(&target, dir.path().join(link).join("Link.ttf"))?;
-        Ok(faces_in(dir.path()))
+        faces_in(dir.path())
     }
 
     /// Whichever of the file and the link the walk reaches first, the font
@@ -245,7 +250,7 @@ mod symlinks {
         let fonts = tempfile::tempdir().unwrap();
         symlink(store.path(), fonts.path().join("linked")).unwrap();
 
-        assert_eq!(faces_in(fonts.path()), 1);
+        assert_eq!(faces_in(fonts.path()).unwrap(), 1);
     }
 
     /// Links a directory of fonts from `link`, a sibling of the directory, and
@@ -255,7 +260,7 @@ mod symlinks {
         std::fs::create_dir(dir.path().join(real))?;
         std::fs::copy(TUFFY, dir.path().join(real).join("Tuffy.ttf"))?;
         symlink(dir.path().join(real), dir.path().join(link))?;
-        Ok(faces_in(dir.path()))
+        faces_in(dir.path())
     }
 
     #[test]
@@ -288,7 +293,7 @@ mod symlinks {
             [fonts.path(), links.path()]
         };
         for dir in order {
-            database.load_fonts_dir(dir);
+            load_dir(&mut database, dir)?;
         }
         Ok(database.len())
     }
@@ -324,7 +329,7 @@ mod symlinks {
     #[test]
     fn a_font_and_a_link_to_it_under_a_linked_root_load_once() {
         let (_store, root) = linked_root().unwrap();
-        assert_eq!(faces_in(&root), 1);
+        assert_eq!(faces_in(&root).unwrap(), 1);
     }
 
     /// A font file that is not a link keeps the path the walk reached it by.
@@ -334,7 +339,7 @@ mod symlinks {
         std::fs::remove_file(root.join("Link.ttf")).unwrap();
 
         let mut database = Database::new();
-        database.load_fonts_dir(&root);
+        load_dir(&mut database, &root).unwrap();
         assert_eq!(loaded_paths(&database), [root.join("Tuffy.ttf")]);
     }
 }

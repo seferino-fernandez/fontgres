@@ -3,7 +3,9 @@
 
 use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 
-use super::{Language, LoadError, Source, Stretch, Style, Weight, parse_face_info};
+use super::{
+    Database, FontLoadFailureReason, Language, Source, Stretch, Style, Weight, parse_face_info,
+};
 
 const UNICODE: u16 = 0;
 const MACINTOSH: u16 = 1;
@@ -20,6 +22,13 @@ fn be16(value: usize) -> [u8; 2] {
 
 /// Returns an sfnt font with `magic` and `tables`.
 fn font(magic: [u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    font_at(0, magic, tables)
+}
+
+/// Returns an sfnt font with `magic` and `tables` that sits `start` bytes
+/// into its data, as a face of a collection does: table offsets count from
+/// the start of the data.
+fn font_at(start: usize, magic: [u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     // Table records are sorted by tag, which a face searches them by.
     let mut tables = tables.to_vec();
     tables.sort_by_key(|(tag, _)| **tag);
@@ -30,6 +39,7 @@ fn font(magic: [u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
         .len()
         .checked_mul(16)
         .and_then(|records| records.checked_add(12))
+        .and_then(|header| header.checked_add(start))
         .unwrap();
     for (tag, body) in &tables {
         data.extend(*tag);
@@ -105,7 +115,7 @@ fn named_face_with(tag: [u8; 4], table: Vec<u8>) -> super::FaceInfo {
     .unwrap()
 }
 
-fn parse(data: Vec<u8>) -> Result<super::FaceInfo, LoadError> {
+fn parse(data: Vec<u8>) -> Result<super::FaceInfo, FontLoadFailureReason> {
     let data = Arc::new(data);
     let source = Source::Binary(Arc::<Vec<u8>>::clone(&data));
     parse_face_info(source, &data, 0)
@@ -143,22 +153,109 @@ fn an_opentype_font_loads() {
 #[test]
 fn an_unknown_magic_is_malformed() {
     let error = parse(font(*b"abcd", &[(b"name", english_name("Font"))])).unwrap_err();
-    assert!(matches!(error, LoadError::MalformedFont), "{error}");
+    assert!(
+        matches!(error, FontLoadFailureReason::MalformedFont),
+        "{error}"
+    );
 }
 
 #[test]
 fn a_font_without_a_family_is_unnamed() {
     let error = parse(font(TRUETYPE, &[(b"name", name_table(&[]))])).unwrap_err();
-    assert!(matches!(error, LoadError::UnnamedFont), "{error}");
+    assert!(
+        matches!(error, FontLoadFailureReason::NoFamilyName),
+        "{error}"
+    );
 }
 
 #[test]
 fn load_errors_read_as_sentences() {
-    assert_eq!(LoadError::MalformedFont.to_string(), "malformed font");
     assert_eq!(
-        LoadError::UnnamedFont.to_string(),
+        FontLoadFailureReason::MalformedFont.to_string(),
+        "malformed font"
+    );
+    assert_eq!(
+        FontLoadFailureReason::NoFamilyName.to_string(),
         "font doesn't have a family name"
     );
+}
+
+/// Returns a collection of `faces`, each built by a function given where
+/// the face starts in the data.
+fn collection(faces: &[&dyn Fn(usize) -> Vec<u8>]) -> Vec<u8> {
+    let mut data = b"ttcf".to_vec();
+    data.extend(0x0001_0000_u32.to_be_bytes());
+    data.extend(u32::try_from(faces.len()).unwrap().to_be_bytes());
+    // The header so far, then one offset per face.
+    let mut start = faces
+        .len()
+        .checked_mul(4)
+        .and_then(|offsets| offsets.checked_add(12))
+        .unwrap();
+    let mut bodies = Vec::new();
+    for face in faces {
+        data.extend(u32::try_from(start).unwrap().to_be_bytes());
+        let body = face(start);
+        start = start.checked_add(body.len()).unwrap();
+        bodies.extend(body);
+    }
+    data.extend(bodies);
+    data
+}
+
+/// A collection whose first face has no family name and whose third does not
+/// parse loads the second, and reports the other two by index and reason.
+#[test]
+fn a_collection_loads_the_faces_that_parse_and_reports_the_others() {
+    let data = collection(&[
+        &|start| font_at(start, TRUETYPE, &[(b"name", name_table(&[]))]),
+        &|start| font_at(start, TRUETYPE, &[(b"name", english_name("Font"))]),
+        &|start| font_at(start, *b"abcd", &[]),
+    ]);
+    let mut database = Database::new();
+    let report = database.load_font_data(data);
+
+    let added: Vec<_> = report.added().collect();
+    assert_eq!(added.len(), 1);
+    let face = database.face(added[0]).unwrap();
+    assert_eq!((face.index, face.families[0].0.as_str()), (1, "Font"));
+    assert_eq!(database.len(), 1);
+    assert_eq!(report.skipped(), 0);
+
+    let failures: Vec<_> = report
+        .failures()
+        .iter()
+        .map(|failure| (failure.face_index, failure.to_string()))
+        .collect();
+    assert_eq!(
+        failures,
+        [
+            (
+                Some(0),
+                "cannot load face 0: font doesn't have a family name".to_string()
+            ),
+            (Some(2), "cannot load face 2: malformed font".to_string()),
+        ]
+    );
+    assert!(matches!(
+        report.failures()[0].reason,
+        FontLoadFailureReason::NoFamilyName
+    ));
+    assert!(matches!(
+        report.into_failures()[1].reason,
+        FontLoadFailureReason::MalformedFont
+    ));
+}
+
+/// A collection that declares no face adds nothing and has nothing to report.
+#[test]
+fn a_collection_without_faces_reports_no_failure() {
+    let mut database = Database::new();
+    let report = database.load_font_data(collection(&[]));
+
+    assert_eq!(report.added().len(), 0);
+    assert!(report.failures().is_empty());
+    assert!(database.is_empty());
 }
 
 #[test]

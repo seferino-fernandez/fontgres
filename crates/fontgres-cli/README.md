@@ -28,6 +28,9 @@ The binary is written to `target/release/fontgres`. Add it to your `PATH` or inv
 
 Each command loads the system's fonts, plus any `--font-dir` (scanned
 recursively) and `--font-file`; `--no-system-fonts` skips the system fonts.
+A `--font-file` must hold a font, and it is an error when it does not. A file
+in a directory that cannot be loaded is skipped with a warning, which `-v`
+shows.
 
 ```shell
 fontgres families

@@ -16,7 +16,7 @@ system = true
 # CLI: --font-dir (repeatable)
 dirs = []
 
-# Individual font files.
+# Individual font files. A file that holds no font is an error.
 # Env: FONTGRES_FONTS_FILES (path list); CLI: --font-file (repeatable)
 files = []
 

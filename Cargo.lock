@@ -489,7 +489,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "tinyvec",
  "toml",
  "tracing",
  "tracing-subscriber",
