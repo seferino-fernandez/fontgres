@@ -240,7 +240,7 @@ fn missing_font_dir_and_file_fail_naming_the_path() {
         .assert()
         .failure()
         .stderr(contains(format!(
-            "font directory {} does not exist",
+            "cannot read font directory {}: ",
             missing.display()
         )));
     fontgres(&dir)
@@ -311,26 +311,87 @@ fn invalid_log_level_warns_and_falls_back_to_errors_only() {
     );
 }
 
-/// fontdb logs through the `log` crate; tracing-subscriber's default
-/// `tracing-log` feature forwards those records, so they obey the CLI's level.
+/// A directory holding Tuffy and `not-a-font.ttf`, a text file.
+#[expect(clippy::unwrap_used, reason = "unwrap is fine in test helpers")]
+fn fonts_with_a_file_that_is_not_a_font(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let fonts = dir.path().join("fonts");
+    std::fs::create_dir(&fonts).unwrap();
+    std::fs::copy(fonts_dir().join("Tuffy.ttf"), fonts.join("Tuffy.ttf")).unwrap();
+    std::fs::write(fonts.join("not-a-font.ttf"), "plain text").unwrap();
+    fonts
+}
+
+/// A font file named on the command line must hold a font, whether or not a
+/// directory given beside it already met the file.
 #[test]
-fn fontdb_log_warnings_reach_stderr_at_warn_level() {
+fn a_named_font_file_that_is_not_a_font_fails_naming_the_path_and_reason() {
     let dir = tempfile::tempdir().unwrap();
-    let not_a_font = dir.path().join("not-a-font.ttf");
-    std::fs::write(&not_a_font, "plain text").unwrap();
-    let warning = "Failed to load a font face";
+    let fonts = fonts_with_a_file_that_is_not_a_font(&dir);
+    let not_a_font = fonts.join("not-a-font.ttf");
+    let error = format!("no font faces in {}: malformed font", not_a_font.display());
     fontgres(&dir)
         .arg("--font-file")
         .arg(&not_a_font)
+        .arg("families")
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(contains(&error));
+    fontgres(&dir)
+        .arg("--font-dir")
+        .arg(&fonts)
+        .arg("--font-file")
+        .arg(&not_a_font)
+        .arg("families")
+        .assert()
+        .failure()
+        .stderr(contains(&error));
+}
+
+/// A font file that its directory already loaded, or that is named twice,
+/// loads once and is not an error.
+#[test]
+fn a_named_font_file_that_is_already_loaded_is_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let fonts = fonts_with_a_file_that_is_not_a_font(&dir);
+    let font = fonts.join("Tuffy.ttf");
+    let faces = json_output(
+        fontgres(&dir)
+            .arg("--font-dir")
+            .arg(&fonts)
+            .arg("--font-file")
+            .arg(&font)
+            .arg("--font-file")
+            .arg(&font)
+            .args(["--output", "json", "faces"]),
+    );
+    assert_eq!(faces.as_array().map(Vec::len), Some(1), "{faces}");
+}
+
+/// A font directory may hold a file that is not a font: the run succeeds,
+/// and the warning that names the file follows the CLI's log level.
+#[test]
+fn a_font_dir_with_a_file_that_is_not_a_font_warns_only_when_verbose() {
+    let dir = tempfile::tempdir().unwrap();
+    let fonts = fonts_with_a_file_that_is_not_a_font(&dir);
+    let warning = format!(
+        "cannot load face 0 of {}: malformed font",
+        fonts.join("not-a-font.ttf").display()
+    );
+    fontgres(&dir)
+        .arg("--font-dir")
+        .arg(&fonts)
         .args(["-v", "families"])
         .assert()
         .success()
-        .stderr(contains(warning));
+        .stdout(contains("Tuffy"))
+        .stderr(contains("WARN").and(contains(&warning)));
     fontgres(&dir)
-        .arg("--font-file")
-        .arg(&not_a_font)
+        .arg("--font-dir")
+        .arg(&fonts)
         .args(["families"])
         .assert()
         .success()
-        .stderr(contains(warning).not());
+        .stdout(contains("Tuffy"))
+        .stderr(contains(&warning).not());
 }

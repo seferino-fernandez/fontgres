@@ -21,12 +21,19 @@ data or the system into a `Database`, then list them or match one with a
 - `Source::File` holds a shared path. `Source::SharedFile`,
   `make_shared_face_data`, `make_face_data_unshared` and `face_source` are
   gone.
+- Every load returns a `FontLoadReport`: the faces it added, how many font
+  files it skipped as already loaded, and each file or face it could not load,
+  with the reason. Nothing is logged about them. `load_fonts_dir` returns an
+  error when the directory it is given cannot be read.
 
 ```rust,no_run
 use fontgres_core::{Database, Family, Query, Weight};
 
 let mut db = Database::new();
-db.load_system_fonts();
+let report = db.load_system_fonts();
+for failure in report.failures() {
+    eprintln!("{failure}");
+}
 let query = Query {
     families: &[Family::Name("Noto Sans"), Family::SansSerif],
     weight: Weight::BOLD,
@@ -50,7 +57,9 @@ The `cli` feature adds what the CLI and MCP server have in common:
   generic families (`[fonts.generic]`) and logging (`[log]`). A bad env value,
   a missing `--config`/`FONTGRES_CONFIG` file or invalid TOML is an error naming
   its source.
-- `models`: `FontsConfig::build_database`, the serializable `Face` view with
+- `models`: `FontsConfig::build_database`, which fails on a font directory it
+  cannot read and on a named font file that gives no face, and logs a warning
+  for any other file or face it cannot load; the serializable `Face` view with
   CSS keywords for style and stretch, `FontQuery` (CSS generic names resolve
   through the configured families), and the face and family listings.
 - `cli`: the `completions` and `man` subcommand helpers.

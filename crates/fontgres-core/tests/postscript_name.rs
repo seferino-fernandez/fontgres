@@ -12,7 +12,8 @@ const MISSING_PS: &str = concat!(
 #[test]
 fn a_face_without_a_postscript_name_loads_with_one_made_from_its_family() {
     let mut database = Database::new();
-    database.load_font_data(std::fs::read(MISSING_PS).unwrap());
+    let report = database.load_font_data(std::fs::read(MISSING_PS).unwrap());
+    assert!(report.failures().is_empty());
 
     let faces = database.faces();
     assert_eq!(faces.len(), 1);

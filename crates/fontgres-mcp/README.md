@@ -40,7 +40,7 @@ fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
 configured level prints a warning and falls back to `info`. Logs go to stderr,
-including fontdb's warnings about files it cannot parse.
+including the warning for a font file or face that cannot be loaded.
 
 ## Tools
 

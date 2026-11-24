@@ -73,8 +73,9 @@ fn generic_family_is_the_first_installed_preference() {
 
 fn assert_generic_families() {
     let mut database = Database::new();
-    database.load_system_fonts();
+    let report = database.load_system_fonts();
 
+    assert_eq!(report.added().len(), 1);
     assert_eq!(database.len(), 1);
     assert_eq!(database.family_name(&Family::Serif), "Tuffy");
     // Without an installed preference, the family is the first one fontconfig tries.

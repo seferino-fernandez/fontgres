@@ -89,3 +89,29 @@ fn missing_env_config_file_is_an_error_naming_the_variable() {
             "config file /nonexistent/fontgres/config.toml set by FONTGRES_CONFIG does not exist",
         ));
 }
+
+/// The server does not start on a font file that holds no font: it would
+/// serve without a font its configuration names.
+#[test]
+fn a_named_font_file_that_is_not_a_font_keeps_the_server_from_starting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    let not_a_font = dir.path().join("not-a-font.ttf");
+    std::fs::write(&not_a_font, "plain text").unwrap();
+    Command::cargo_bin("fontgres-mcp")
+        .unwrap()
+        .env_clear()
+        .arg("--config")
+        .arg(&config)
+        .arg("--no-system-fonts")
+        .arg("--font-file")
+        .arg(&not_a_font)
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "no font faces in {}: malformed font",
+            not_a_font.display()
+        )));
+}
