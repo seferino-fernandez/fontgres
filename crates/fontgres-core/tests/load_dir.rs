@@ -32,41 +32,95 @@ fn other_extensions_do_not_load() {
     assert_eq!(faces_in(dir.path()), 0);
 }
 
-/// A directory large enough to parse on several threads keeps the order a
-/// one-by-one load gives: the directory's order, with a file that is not a
-/// font skipped.
-#[test]
-fn a_large_directory_loads_in_directory_order() {
-    let dir = tempfile::tempdir().unwrap();
-    for index in 0..64 {
-        std::fs::copy(TUFFY, dir.path().join(format!("Tuffy{index:02}.ttf"))).unwrap();
-    }
-    std::fs::write(dir.path().join("Broken.ttf"), "not a font").unwrap();
-    let expected: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| !path.ends_with("Broken.ttf"))
-        .collect();
+/// The paths of the faces in `database`, in load order. A face that was not
+/// loaded from a file gives an empty path, which equals no expected path.
+fn loaded_paths(database: &Database) -> Vec<std::path::PathBuf> {
+    use fontgres_core::Source;
 
-    let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
-    let loaded: Vec<_> = database
+    database
         .faces()
-        .map(|face| {
-            let fontgres_core::Source::File(path) = &face.source else {
-                panic!("{:?} is not a file source", face.source);
-            };
-            path.clone()
+        .iter()
+        .map(|face| match &face.source {
+            Source::File(path) => path.to_path_buf(),
+            Source::Binary(_) => std::path::PathBuf::new(),
         })
-        .collect();
-    assert_eq!(loaded, expected);
+        .collect()
+}
+
+/// A directory holding a copy of Tuffy under each of `names`, made in that
+/// order; a name can put its copy in a subdirectory.
+fn dir_with_copies<P: AsRef<Path>>(
+    names: impl IntoIterator<Item = P>,
+) -> std::io::Result<tempfile::TempDir> {
+    let dir = tempfile::tempdir()?;
+    for name in names {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(TUFFY, path)?;
+    }
+    Ok(dir)
 }
 
 /// A directory holding a copy of Tuffy.
 fn dir_with_tuffy() -> std::io::Result<tempfile::TempDir> {
-    let dir = tempfile::tempdir()?;
-    std::fs::copy(TUFFY, dir.path().join("Tuffy.ttf"))?;
-    Ok(dir)
+    dir_with_copies(["Tuffy.ttf"])
+}
+
+/// The paths `load_fonts_dir` loads from `dir`, in load order.
+fn paths_loaded_from(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut database = Database::new();
+    database.load_fonts_dir(dir);
+    loaded_paths(&database)
+}
+
+/// A directory large enough to parse on several threads loads in the order
+/// of its file names, with a file that is not a font skipped. The files are
+/// created in an order that is neither that one nor its reverse, so a file
+/// system that lists entries as they were created does not pass by accident.
+#[test]
+fn a_large_directory_loads_in_file_name_order() {
+    let name = |index: usize| format!("Tuffy{index:02}.ttf");
+    let dir = dir_with_copies((0..64).map(|step| name(step * 37 % 64))).unwrap();
+    std::fs::write(dir.path().join("Tuffy31a.ttf"), "not a font").unwrap();
+
+    let expected: Vec<_> = (0..64).map(|index| dir.path().join(name(index))).collect();
+    assert_eq!(paths_loaded_from(dir.path()), expected);
+}
+
+/// Files and subdirectories sort together by name, compared as bytes, so an
+/// uppercase name loads before a lowercase one and a subdirectory's fonts
+/// load where its name falls.
+#[test]
+fn files_and_subdirectories_load_in_one_file_name_order() {
+    let dir = dir_with_copies(["c.ttf", "b/z.ttf", "a.ttf", "b/y.ttf", "Z.ttf"]).unwrap();
+
+    let expected =
+        ["Z.ttf", "a.ttf", "b/y.ttf", "b/z.ttf", "c.ttf"].map(|name| dir.path().join(name));
+    assert_eq!(paths_loaded_from(dir.path()), expected);
+}
+
+/// Two files hold the same face, so a query for it is a tie, which the face
+/// loaded first wins: the one whose file name sorts first.
+#[test]
+fn a_tie_between_two_files_goes_to_the_first_file_name() {
+    use fontgres_core::{Family, Query, Source};
+
+    let dir = dir_with_copies(["b.ttf", "a.ttf", "c.ttf"]).unwrap();
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+
+    let families = [Family::Name("Tuffy")];
+    let query = Query {
+        families: &families,
+        ..Query::default()
+    };
+    let winner = database.query(&query).map(|face| &face.source);
+    assert!(
+        matches!(winner, Some(Source::File(path)) if **path == dir.path().join("a.ttf")),
+        "{winner:?}"
+    );
 }
 
 #[test]
@@ -76,6 +130,17 @@ fn a_directory_loaded_twice_loads_its_fonts_once() {
     database.load_fonts_dir(dir.path());
     database.load_fonts_dir(dir.path());
     assert_eq!(database.len(), 1);
+}
+
+/// A file source prints as the path it reads, so a logged face names its file.
+#[test]
+fn a_file_source_debug_prints_its_path() {
+    let dir = dir_with_tuffy().unwrap();
+    let mut database = Database::new();
+    database.load_fonts_dir(dir.path());
+
+    let printed = format!("{:?}", database.faces()[0].source);
+    assert_eq!(printed, format!("File({:?})", dir.path().join("Tuffy.ttf")));
 }
 
 /// Whichever of the directory and the file loads first, the font loads once.
@@ -105,21 +170,10 @@ fn a_directory_loaded_again_loads_the_fonts_added_since() {
     assert_eq!(database.len(), 2);
 }
 
-#[test]
-fn a_removed_face_stays_removed_when_its_directory_loads_again() {
-    let dir = dir_with_tuffy().unwrap();
-    let mut database = Database::new();
-    database.load_fonts_dir(dir.path());
-    let id = database.faces().next().unwrap().id;
-    database.remove_face(id);
-    database.load_fonts_dir(dir.path());
-    assert!(database.is_empty());
-}
-
 #[cfg(unix)]
 mod symlinks {
-    use super::{TUFFY, faces_in};
-    use fontgres_core::{Database, Source};
+    use super::{TUFFY, faces_in, loaded_paths};
+    use fontgres_core::Database;
     use std::os::unix::fs::symlink;
 
     /// Content-addressed stores name files by hash and link font names to them.
@@ -281,15 +335,6 @@ mod symlinks {
 
         let mut database = Database::new();
         database.load_fonts_dir(&root);
-        let paths: Vec<_> = database
-            .faces()
-            .map(|face| {
-                let Source::File(path) = &face.source else {
-                    panic!("{:?} is not a file source", face.source);
-                };
-                path.clone()
-            })
-            .collect();
-        assert_eq!(paths, [root.join("Tuffy.ttf")]);
+        assert_eq!(loaded_paths(&database), [root.join("Tuffy.ttf")]);
     }
 }

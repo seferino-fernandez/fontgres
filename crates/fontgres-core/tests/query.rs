@@ -18,7 +18,11 @@ fn query_matches_family_names_ignoring_ascii_case() {
             families: &families,
             ..Query::default()
         };
-        assert_eq!(database.query(&query), Some(ids[0]), "{name}");
+        assert_eq!(
+            database.query(&query).map(|face| face.id),
+            Some(ids[0]),
+            "{name}"
+        );
     }
 }
 
@@ -32,5 +36,5 @@ fn query_still_misses_a_different_family() {
         families: &families,
         ..Query::default()
     };
-    assert_eq!(database.query(&query), None);
+    assert!(database.query(&query).is_none());
 }

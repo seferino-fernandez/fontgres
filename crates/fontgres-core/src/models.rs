@@ -62,8 +62,6 @@ fn source_path(source: &Source) -> Option<&Path> {
     match source {
         Source::Binary(_) => None,
         Source::File(path) => Some(path),
-        #[cfg(feature = "memmap")]
-        Source::SharedFile(path, _) => Some(path),
     }
 }
 
@@ -215,8 +213,7 @@ impl FontQuery {
             stretch: self.stretch.into(),
             style: self.style.into(),
         };
-        let id = database.query(&query)?;
-        database.face(id).map(Face::from)
+        database.query(&query).map(Face::from)
     }
 }
 
@@ -239,11 +236,10 @@ fn family(name: &str) -> Family<'_> {
 /// With `family`, returns only the faces that carry that family name in any
 /// language, compared ignoring ASCII case.
 pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
-    let mut faces: Vec<Face> = database
-        .faces()
-        .filter(|info| family.is_none_or(|wanted| info.has_family(wanted)))
-        .map(Face::from)
-        .collect();
+    let mut faces: Vec<Face> = match family {
+        Some(wanted) => database.family_faces(wanted).map(Face::from).collect(),
+        None => database.faces().iter().map(Face::from).collect(),
+    };
     faces.sort_by(|a, b| {
         a.family
             .cmp(&b.family)
@@ -259,6 +255,7 @@ pub fn faces(database: &Database, family: Option<&str>) -> Vec<Face> {
 pub fn family_names(database: &Database) -> Vec<String> {
     let mut names: Vec<String> = database
         .faces()
+        .iter()
         .filter_map(|info| info.families.first().map(|(name, _)| name.clone()))
         .collect();
     names.sort();

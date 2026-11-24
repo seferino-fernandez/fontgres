@@ -5,8 +5,9 @@
 //! directories into a [`Database`], then list its faces or ask it for the
 //! face that best matches a [`Query`], using the CSS font matching algorithm
 //! for stretch, style and weight. The crate is a fork of
-//! [fontdb](https://github.com/RazrFalcon/fontdb) 0.24.0 and keeps its API at
-//! the crate root.
+//! [fontdb](https://github.com/RazrFalcon/fontdb) 0.24.0. The database at the
+//! crate root began as fontdb's and has since diverged: it only gains faces,
+//! keeps them in load order, and a query returns the face itself.
 //!
 //! The database only stores and matches faces. It reads a face's names, style,
 //! weight, stretch and monospace flag, and leaves other font properties to a
@@ -37,8 +38,7 @@
 //!     weight: Weight::BOLD,
 //!     ..Query::default()
 //! };
-//! let id = db.query(&query).expect("Tuffy is loaded");
-//! let face = db.face(id).expect("a matched ID is in the database");
+//! let face = db.query(&query).expect("Tuffy is loaded");
 //! assert_eq!(face.post_script_name, "Tuffy");
 //! // Tuffy has no bold face, so the query falls back to its medium one.
 //! assert_eq!(face.weight, Weight::MEDIUM);
@@ -113,28 +113,25 @@ use alloc::{
 pub use ttf_parser::Language;
 pub use ttf_parser::Width as Stretch;
 
-use slotmap::SlotMap;
 use tinyvec::TinyVec;
 
-/// Identifies a face within one [`Database`].
+/// Identifies a face within one [`Database`]: the face's position in the
+/// database's load order.
+///
+/// IDs ascend in load order, so comparing two IDs of one database tells which
+/// face was loaded first, and the faces one load adds have consecutive IDs. A
+/// database never removes a face, so an ID it issued stays valid and is never
+/// given to another face.
 ///
 /// An ID carries no reference to the database that issued it. Looking it up
-/// in another database returns `None` or, if that database happens to hold a
-/// face under the same key, an unrelated face; keeping IDs with their database
-/// is up to the caller.
+/// in another database returns `None` or, if that database holds a face at
+/// the same position, an unrelated face; keeping IDs with their database is
+/// up to the caller.
 ///
-/// The database panics if it runs out of IDs, which takes more than four
-/// billion faces.
-///
-/// `Display` writes unequal IDs as different strings; the format is not
-/// otherwise specified.
-#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Debug, Default)]
-pub struct ID(InnerId);
-
-slotmap::new_key_type! {
-    /// Internal ID type.
-    struct InnerId;
-}
+/// The default ID is [`ID::dummy`]. `Display` writes unequal IDs as different
+/// strings; the format is not otherwise specified.
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Debug)]
+pub struct ID(usize);
 
 impl ID {
     /// Returns a placeholder ID that matches no face.
@@ -143,13 +140,21 @@ impl ID {
     /// [`Database::push_face_info`], which replaces it.
     #[inline]
     pub fn dummy() -> Self {
-        Self(InnerId::from(slotmap::KeyData::from_ffi(u64::MAX)))
+        // A database cannot hold this many faces: a `Vec` holds at most
+        // `isize::MAX` bytes, and a face takes more than one.
+        Self(usize::MAX)
+    }
+}
+
+impl Default for ID {
+    fn default() -> Self {
+        Self::dummy()
     }
 }
 
 impl core::fmt::Display for ID {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", (self.0).0.as_ffi())
+        write!(f, "{}", self.0)
     }
 }
 
@@ -190,31 +195,43 @@ impl core::fmt::Display for LoadError {
 /// Stores font faces and finds the face that best matches a [`Query`].
 ///
 /// Faces are added by the `load_*` methods or [`push_face_info`], and read
-/// back with [`face`], [`faces`] and [`query`]. The database also holds the
-/// family each CSS generic family ([`Family::Serif`] and the others) resolves
-/// to.
+/// back with [`face`], [`faces`], [`family_faces`] and [`query`]. The
+/// database also holds the family each CSS generic family ([`Family::Serif`]
+/// and the others) resolves to.
+///
+/// # Load order
+///
+/// A database only gains faces; none is ever removed. It keeps them in load
+/// order, the order they were added in: one load after another, and within a
+/// load the order that load documents. A collection adds its faces in the
+/// order the file holds them. [`faces`] and [`family_faces`] return faces in
+/// load order, an [`ID`] is a face's position in it, and when a [`query`]
+/// finds several faces equally good, the one loaded first wins. To drop
+/// faces, build a new database.
+///
+/// # Font files
 ///
 /// The file-system loads ([`load_fonts_dir`], [`load_system_fonts`] and
 /// [`load_font_file`]) load each font file once per database: the database
 /// remembers each font file they reach, by canonical path, and skips it on any
-/// later load, even after [`remove_face`] removed its faces. The directory and
-/// system loads remember a file even when it fails to read or parse;
-/// [`load_font_file`] remembers it only once it reads, so a failed call can be
-/// retried. Copies of a font
-/// and hard links to it are different files and each load. A clone remembers
-/// what the original loaded; to load files again, use a new database.
+/// later load. The directory and system loads remember a file even when it
+/// fails to read or parse; [`load_font_file`] remembers it only once it reads,
+/// so a failed call can be retried. Copies of a font and hard links to it are
+/// different files and each load. A clone remembers what the original loaded;
+/// to load files again, use a new database.
 ///
 /// [`load_fonts_dir`]: Database::load_fonts_dir
 /// [`load_system_fonts`]: Database::load_system_fonts
 /// [`load_font_file`]: Database::load_font_file
-/// [`remove_face`]: Database::remove_face
 /// [`push_face_info`]: Database::push_face_info
 /// [`face`]: Database::face
 /// [`faces`]: Database::faces
+/// [`family_faces`]: Database::family_faces
 /// [`query`]: Database::query
 #[derive(Clone, Debug)]
 pub struct Database {
-    faces: SlotMap<InnerId, FaceInfo>,
+    /// Every face, in load order; a face's [`ID`] is its index here.
+    faces: Vec<FaceInfo>,
     family_serif: String,
     family_sans_serif: String,
     family_cursive: String,
@@ -246,7 +263,7 @@ impl Database {
     #[inline]
     pub fn new() -> Self {
         Database {
-            faces: SlotMap::with_key(),
+            faces: Vec::new(),
             family_serif: "Times New Roman".to_string(),
             family_sans_serif: "Arial".to_string(),
             family_cursive: "Comic Sans MS".to_string(),
@@ -402,6 +419,12 @@ impl Database {
     /// or any other file-system load, is skipped. Loading a directory again
     /// adds only the files added to it since.
     ///
+    /// The entries of each directory load in the order of their file names,
+    /// compared as bytes, so `B.ttf` loads before `a.ttf`. Files, subdirectories
+    /// and links sort together, each by its own name, and a subdirectory's
+    /// fonts load where its name falls. The order does not depend on the file
+    /// system, so the same fonts load in the same order on every machine.
+    ///
     /// Nothing here is an error. A directory that does not exist or cannot be
     /// read adds nothing, silently. A file that cannot be read, and a face that
     /// fails to parse, is skipped and logged as a warning.
@@ -434,7 +457,11 @@ impl Database {
     ///   `accept`, then `default`), or the first one tried when none is
     ///   installed.
     ///
-    /// Other platforms load nothing. Errors are handled as in
+    /// Other platforms load nothing. The directories load in the order listed
+    /// here, or in the order fontconfig's configuration lists them, and each
+    /// loads in the order [`load_fonts_dir`](Database::load_fonts_dir)
+    /// documents; the downloadable font directories load in the order of their
+    /// names. Errors are handled as in
     /// [`load_fonts_dir`](Database::load_fonts_dir).
     #[cfg(feature = "fs")]
     pub fn load_system_fonts(&mut self) {
@@ -464,7 +491,7 @@ impl Database {
             walk.find_font_files("/Library/Fonts".as_ref());
             walk.find_font_files("/System/Library/Fonts".as_ref());
             // Downloadable fonts, location varies on major macOS releases
-            let assets = std::fs::read_dir("/System/Library/AssetsV2")
+            let mut assets: Vec<_> = std::fs::read_dir("/System/Library/AssetsV2")
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -473,9 +500,13 @@ impl Database {
                         .file_name()
                         .to_string_lossy()
                         .starts_with("com_apple_MobileAsset_Font")
-                });
-            for entry in assets {
-                walk.find_font_files(&entry.path());
+                })
+                .map(|entry| entry.path())
+                .collect();
+            // The file system's order is not the same on every machine.
+            assets.sort_unstable();
+            for dir in &assets {
+                walk.find_font_files(dir);
             }
             walk.find_font_files("/Network/Library/Fonts".as_ref());
 
@@ -605,7 +636,7 @@ impl Database {
         ]
         .map(|generic| {
             generic_family::resolve(&aliases, generic, |name| {
-                self.faces.iter().any(|(_, face)| face.has_family(name))
+                self.family_faces(name).next().is_some()
             })
             .map(str::to_owned)
         });
@@ -633,23 +664,13 @@ impl Database {
     /// data at `info.source` is not parsed or even read. Whatever
     /// [`FaceInfo::id`] holds is replaced by the new ID, so fill it with
     /// [`ID::dummy`].
+    ///
+    /// The face goes last in the database's load order.
     pub fn push_face_info(&mut self, mut info: FaceInfo) -> ID {
-        ID(self.faces.insert_with_key(|k| {
-            info.id = ID(k);
-            info
-        }))
-    }
-
-    /// Removes the face with `id` from the database.
-    ///
-    /// Use it to drop unwanted faces after loading a directory, or a single
-    /// face of a collection. An `id` that matches no face is ignored.
-    ///
-    /// The database still remembers the face's file as loaded, so loading the
-    /// file or its directory again does not bring the face back. To load it
-    /// again, use a new database.
-    pub fn remove_face(&mut self, id: ID) {
-        self.faces.remove(id.0);
+        let id = ID(self.faces.len());
+        info.id = id;
+        self.faces.push(info);
+        id
     }
 
     /// Returns `true` if the `Database` contains no font faces.
@@ -719,6 +740,9 @@ impl Database {
     /// chosen as the CSS font matching algorithm does. Family names compare
     /// ignoring ASCII case, as [`FaceInfo::has_family`] does.
     ///
+    /// When several faces of the family are equal in stretch, style and
+    /// weight, the one earliest in load order is returned.
+    ///
     /// # Examples
     ///
     /// ```
@@ -735,47 +759,54 @@ impl Database {
     /// assert!(db.query(&Query { families: &families, ..Query::default() }).is_some());
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn query(&self, query: &Query<'_>) -> Option<ID> {
-        for family in query.families {
-            let name = self.family_name(family);
-            let candidates: Vec<_> = self
-                .faces
-                .iter()
-                .filter(|(_, face)| face.has_family(name))
-                .map(|(_, info)| info)
-                .collect();
-
-            if let Some(face) = find_best_match(&candidates, query) {
-                return Some(face.id);
-            }
-        }
-
-        None
+    pub fn query(&self, query: &Query<'_>) -> Option<&FaceInfo> {
+        query.families.iter().find_map(|family| {
+            let candidates: Vec<_> = self.family_faces(self.family_name(family)).collect();
+            find_best_match(&candidates, query)
+        })
     }
 
-    /// Returns an iterator over every face in the database, in no particular
-    /// order.
+    /// Returns every face in the database, in load order.
     ///
-    /// Use it for matching that [`query`](Database::query) does not cover.
+    /// The face with [`ID`] `id` is the one [`face`](Database::face) returns
+    /// for it. Use the slice for matching that [`query`](Database::query) does
+    /// not cover.
     #[inline]
-    pub fn faces(&self) -> impl Iterator<Item = &FaceInfo> + '_ {
-        self.faces.iter().map(|(_, info)| info)
+    pub fn faces(&self) -> &[FaceInfo] {
+        &self.faces
+    }
+
+    /// Returns the faces of the family `name`, in load order.
+    ///
+    /// A face belongs to the family when `name` is one of its family names in
+    /// any language, ignoring ASCII case, as [`FaceInfo::has_family`] tells.
+    /// A generic family is a [`Family`], not a name; resolve it with
+    /// [`family_name`](Database::family_name) first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fontgres_core::Database;
+    ///
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
+    /// let mut db = Database::new();
+    /// db.load_font_data(std::fs::read(path)?);
+    ///
+    /// assert_eq!(db.family_faces("tuffy").count(), 1);
+    /// assert_eq!(db.family_faces("Tuffy Sans").count(), 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn family_faces<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a FaceInfo> {
+        self.faces.iter().filter(move |face| face.has_family(name))
     }
 
     /// Returns the face with `id`.
     ///
-    /// Returns `None` when the face was removed, or when `id` came from
-    /// another database. See [`ID`] for why an ID from another database can
-    /// also return an unrelated face.
+    /// Returns `None` for [`ID::dummy`] and for an ID that came from another
+    /// database. See [`ID`] for why an ID from another database can also
+    /// return an unrelated face.
     pub fn face(&self, id: ID) -> Option<&FaceInfo> {
         self.faces.get(id.0)
-    }
-
-    /// Returns where the face with `id` is stored, and its index in that font.
-    ///
-    /// Returns `None` when no face has `id`, as for [`face`](Database::face).
-    pub fn face_source(&self, id: ID) -> Option<(Source, u32)> {
-        self.face(id).map(|info| (info.source.clone(), info.index))
     }
 
     /// Calls `p` with the data of the font holding the face with `id`, and
@@ -797,7 +828,7 @@ impl Database {
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
     /// db.load_font_data(std::fs::read(path)?);
-    /// let id = db.faces().next().expect("Tuffy is loaded").id;
+    /// let id = db.faces().first().expect("Tuffy is loaded").id;
     ///
     /// let (magic, index) = db
     ///     .with_face_data(id, |data, index| (data[..4].to_vec(), index))
@@ -810,38 +841,8 @@ impl Database {
     where
         P: FnOnce(&[u8], u32) -> T,
     {
-        let (src, face_index) = self.face_source(id)?;
-        src.with_data(|data| p(data, face_index))
-    }
-
-    /// Replaces the [`Source::SharedFile`] of the face with `id` with a
-    /// [`Source::File`] for the same path.
-    ///
-    /// Every face whose source is a `SharedFile` for that path changes, so all
-    /// the faces of a collection stop sharing the mapped data together. The
-    /// database drops its references to the mapping; the mapping closes once no
-    /// other reference holds it, and the faces' data is read from the file again
-    /// on each later access. A face with any other source, or an `id` that
-    /// matches no face, is left alone.
-    #[cfg(all(feature = "fs", feature = "memmap"))]
-    pub fn make_face_data_unshared(&mut self, id: ID) {
-        let Some(face_info) = self.faces.get(id.0) else {
-            return;
-        };
-
-        let old_source = face_info.source.clone();
-
-        let Source::SharedFile(shared_path, _) = old_source else {
-            return;
-        };
-
-        let new_source = Source::File(shared_path.clone());
-
-        self.faces.iter_mut().for_each(|(_, face)| {
-            if matches!(&face.source, Source::SharedFile(path, ..) if path == &shared_path) {
-                face.source = new_source.clone();
-            }
-        });
+        let face = self.face(id)?;
+        face.source.with_data(|data| p(data, face.index))
     }
 }
 
@@ -851,7 +852,7 @@ impl Database {
 /// A font can hold several faces; each is a separate `FaceInfo`.
 #[derive(Clone, Debug)]
 pub struct FaceInfo {
-    /// The face's ID in its database.
+    /// The face's ID in its database: its position in the load order.
     pub id: ID,
 
     /// Where the font holding the face is stored.
@@ -923,7 +924,7 @@ impl FaceInfo {
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
     /// let mut db = Database::new();
     /// db.load_font_data(std::fs::read(path)?);
-    /// let face = db.faces().next().expect("Tuffy is loaded");
+    /// let face = db.faces().first().expect("Tuffy is loaded");
     /// assert!(face.has_family("TUFFY"));
     /// assert!(!face.has_family("Tuffy Sans"));
     /// # Ok::<(), std::io::Error>(())
@@ -942,16 +943,11 @@ pub enum Source {
     Binary(alloc::sync::Arc<dyn AsRef<[u8]> + Sync + Send>),
 
     /// A font file, read each time its data is needed.
+    ///
+    /// The faces of a collection share one path, so cloning the source copies
+    /// no path.
     #[cfg(feature = "fs")]
-    File(std::path::PathBuf),
-
-    /// Font data mapped from the file at the path, shared with whoever else
-    /// holds the mapping.
-    #[cfg(all(feature = "fs", feature = "memmap"))]
-    SharedFile(
-        std::path::PathBuf,
-        std::sync::Arc<dyn AsRef<[u8]> + Sync + Send>,
-    ),
+    File(std::sync::Arc<std::path::Path>),
 }
 
 impl core::fmt::Debug for Source {
@@ -963,12 +959,6 @@ impl core::fmt::Debug for Source {
                 .finish(),
             #[cfg(feature = "fs")]
             Self::File(arg0) => f.debug_tuple("File").field(arg0).finish(),
-            #[cfg(all(feature = "fs", feature = "memmap"))]
-            Self::SharedFile(arg0, arg1) => f
-                .debug_tuple("SharedFile")
-                .field(arg0)
-                .field(&arg1.as_ref().as_ref())
-                .finish(),
         }
     }
 }
@@ -1058,7 +1048,8 @@ struct FontFile {
 
 /// A walk over font directories: the canonical paths of the directories
 /// reached, to walk each once however many paths lead to it, and the font
-/// files found, in walk order. A file reached by several paths is listed once
+/// files found, in walk order. A walk takes the entries of a directory in the
+/// order of their file names. A file reached by several paths is listed once
 /// per path; loading skips all but the first.
 #[cfg(feature = "fs")]
 #[derive(Default)]
@@ -1090,7 +1081,11 @@ impl FontDirWalk {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
-        for entry in entries.flatten() {
+        // The file system's order is not the same on every machine, and load
+        // order decides which of two equally good faces a query returns.
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_cached_key(std::fs::DirEntry::file_name);
+        for entry in entries {
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
@@ -1286,8 +1281,6 @@ impl Source {
             #[cfg(feature = "fs")]
             Source::File(path) => with_file_data(path, p).ok(),
             Source::Binary(data) => Some(p(data.as_ref().as_ref())),
-            #[cfg(all(feature = "fs", feature = "memmap"))]
-            Source::SharedFile(_, data) => Some(p(data.as_ref().as_ref())),
         }
     }
 }
@@ -1591,7 +1584,7 @@ impl NameExt for ttf_parser::name::Name<'_> {
 /// Implements step 4 of
 /// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>.
 /// Step 4d (`font-size`) does not apply. Of the faces left equal after the
-/// steps, the first in `candidates` wins.
+/// steps, the first in `candidates` wins; `candidates` come in load order.
 #[inline(never)]
 fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option<&'a FaceInfo> {
     let mut matching_set = candidates.to_vec();
