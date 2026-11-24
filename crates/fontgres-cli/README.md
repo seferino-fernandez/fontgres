@@ -73,6 +73,6 @@ taken whole from the highest layer that sets it.
 | `--font-file` / `FONTGRES_FONTS_FILES`           | Extra font files (env: a `:`-separated path list).       |
 | `FONTGRES_FONTS_GENERIC_SERIF` (and `_SANS_SERIF`, `_CURSIVE`, `_FANTASY`, `_MONOSPACE`) | Family a CSS generic name resolves to. |
 | `--config` / `FONTGRES_CONFIG`                   | Path to `config.toml`.                                   |
-| `FONTGRES_LOG_LEVEL`                             | Log level: `trace`, `debug`, `info`, `warn`, `error`.    |
+| `FONTGRES_LOG_LEVEL`                             | Log level: `trace`, `debug`, `info`, `warn`, `error`, `off`. |
 
 See [config.toml.example](../../config.toml.example) for all fields and defaults.

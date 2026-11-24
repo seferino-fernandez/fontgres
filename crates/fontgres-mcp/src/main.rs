@@ -11,64 +11,33 @@ mod shared;
 mod stdio;
 mod tools;
 
-use std::io::{Write, stderr};
-
-use clap::{CommandFactory, Parser};
-use clap_complete::CompleteEnv;
-use shared::{Args, Command};
-use tracing::level_filters::LevelFilter;
+use fontgres_core::cli::{self, LevelFilter, Logging};
+use fontgres_core::env::SystemEnv;
+use shared::Args;
 
 use crate::auth::Transport;
-use fontgres_core::cli;
-
 use crate::config::ServerConfig;
 
-/// Applies when neither `-v`/`-q`, `FONTGRES_LOG_LEVEL` nor `[log] level` sets one.
-const DEFAULT_LOG_LEVEL: LevelFilter = LevelFilter::INFO;
+/// The server reports its start and what it serves unless `-v`/`-q`,
+/// `FONTGRES_LOG_LEVEL` or `[log] level` says otherwise.
+const LOGGING: Logging<'_> = Logging {
+    default_level: LevelFilter::INFO,
+    targets: &["fontgres_core", "fontgres_mcp", "rmcp"],
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Dynamic completions: `COMPLETE=<shell> fontgres-mcp`. A no-op for normal runs; exits
-    // the process when handling a completion request, so it must precede any stdout use.
-    CompleteEnv::with_factory(Args::command).complete();
+    let args: Args = cli::parse();
 
-    let args = Args::parse();
-
-    // Static completion scripts need no config, so emit and return early.
-    if let Some(Command::Completions { shell }) = &args.command {
-        cli::write_completions(*shell, Args::command());
+    // Completion scripts and man pages need no config.
+    if let Some(setup) = &args.command {
+        setup.run::<Args>()?;
         return Ok(());
     }
 
-    // Man pages need no config, so emit and return early.
-    if let Some(Command::Man { out_dir }) = &args.command {
-        cli::write_man_pages(Args::command(), out_dir)?;
-        return Ok(());
-    }
-
-    let config = ServerConfig::load(args.config.as_deref(), &args.overrides(), args.transport)?;
-
-    // Default level precedence: explicit `-v`/`-q` overrides config `log.level`,
-    // which overrides `info`; `RUST_LOG` (via `try_from_default_env`) still
-    // overrides everything.
-    let flag = args
-        .verbosity
-        .is_present()
-        .then(|| args.verbosity.tracing_level_filter());
-    let (level, warning) = config.core.log.resolve_level(flag, DEFAULT_LOG_LEVEL);
-    if let Some(warning) = warning {
-        writeln!(stderr().lock(), "fontgres-mcp: warning: {warning}")?;
-    }
-    tracing_subscriber::fmt()
-        .with_writer(stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(format!(
-                    "fontgres_core={level},fontgres_mcp={level},rmcp={level}"
-                ))
-            }),
-        )
-        .init();
+    let config = ServerConfig::load(&args.shared, &SystemEnv)?;
+    args.shared
+        .start_logging(&LOGGING, config.core.log, &SystemEnv);
 
     tracing::info!(
         transport = %args.transport,

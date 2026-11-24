@@ -23,11 +23,6 @@ pub enum Error {
     #[error("configuration error: {0}")]
     Config(ConfigError),
 
-    /// An I/O operation failed, such as reading a configuration file that
-    /// exists.
-    #[error("I/O error")]
-    Io(#[from] std::io::Error),
-
     /// A configured font directory cannot be read: it does not exist, is not
     /// a directory, or may not be listed.
     #[error("cannot read font directory {}", .path.display())]
@@ -103,7 +98,17 @@ pub enum ConfigError {
         set_by_env: bool,
     },
 
-    /// The configuration file is not valid TOML for the expected shape.
+    /// The configuration file exists and cannot be read.
+    #[error("cannot read config file {}: {reason}", .path.display())]
+    Unreadable {
+        /// The file that cannot be read.
+        path: PathBuf,
+        /// Why it cannot be read, as the operating system says it.
+        reason: String,
+    },
+
+    /// The configuration file is not valid TOML for the expected shape: a
+    /// syntax error, an unknown key or table, or a value of the wrong kind.
     #[error(
         "invalid config file {}: {}",
         .path.display(),
@@ -180,8 +185,11 @@ mod tests {
 
     #[test]
     fn chain_prints_each_cause_once() {
-        let io = Error::from(io::Error::new(io::ErrorKind::NotFound, "missing.toml"));
-        assert_eq!(chain_text(&io).matches("missing.toml").count(), 1);
+        let file = Error::FontFile {
+            path: PathBuf::from("/fonts/a.ttf"),
+            source: io::Error::new(io::ErrorKind::NotFound, "no such file"),
+        };
+        assert_eq!(chain_text(&file).matches("no such file").count(), 1);
 
         let config = Error::from(ConfigError::InvalidEnvValue {
             key: "FONTGRES_X".to_string(),
@@ -233,6 +241,13 @@ mod tests {
                     set_by_env: true,
                 },
                 "config file /tmp/typo.toml set by FONTGRES_CONFIG does not exist",
+            ),
+            (
+                ConfigError::Unreadable {
+                    path: path.clone(),
+                    reason: "Is a directory (os error 21)".to_string(),
+                },
+                "cannot read config file /tmp/typo.toml: Is a directory (os error 21)",
             ),
             (
                 ConfigError::Parse {

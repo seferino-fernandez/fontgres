@@ -39,7 +39,7 @@ fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 
 So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
-configured level prints a warning and falls back to `info`. Logs go to stderr,
+configured level keeps the server from starting. Logs go to stderr,
 including the warning for a font file or face that cannot be loaded.
 
 ## Tools
@@ -115,7 +115,8 @@ Each setting comes from the highest layer that sets it: CLI flag, then
 `FONTGRES_*` env, then `config.toml`. A list (font directories or files) is
 taken whole from that layer. A value that does not parse fails at startup
 naming its source: an env var by name and raw value, a TOML key by file, line
-and column.
+and column. A key or table the file does not expect fails the same way,
+`[mcp]` keys included.
 
 | Flag / Variable                                      | Description                                        |
 | ---------------------------------------------------- | -------------------------------------------------- |

@@ -302,13 +302,58 @@ fn toml_error_reports_its_position() {
 }
 
 #[test]
-fn invalid_log_level_warns_and_falls_back_to_errors_only() {
+fn an_invalid_log_level_fails_naming_the_value_even_under_a_verbosity_flag() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("config.toml"), "[log]\nlevel = \"loud\"\n").unwrap();
-    fontgres(&dir).args(["families"]).assert().success().stderr(
-        contains("fontgres: warning: ignoring invalid log level \"loud\"")
-            .and(contains("using error")),
-    );
+    for flags in [&["families"][..], &["-v", "families"]] {
+        fontgres(&dir).args(flags).assert().failure().stderr(
+            contains("line 2, column 9: invalid log level \"loud\"")
+                .and(contains("expected trace, debug, info, warn, error or off")),
+        );
+    }
+}
+
+#[test]
+fn a_config_key_or_table_fontgres_does_not_know_fails_naming_it() {
+    for (toml, unknown) in [
+        ("[log]\nlevels = \"debug\"\n", "levels"),
+        ("[font]\nsystem = false\n", "font"),
+        ("bogus = 1\n", "bogus"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), toml).unwrap();
+        fontgres(&dir)
+            .args(["families"])
+            .assert()
+            .failure()
+            .stderr(contains(format!("unknown field `{unknown}`")));
+    }
+}
+
+/// One file configures both binaries, so `fontgres` accepts the MCP
+/// server's table, whatever it holds.
+#[test]
+fn the_mcp_table_is_accepted_unread() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("config.toml"), "[mcp]\nbogus = 1\n").unwrap();
+    fontgres(&dir).args(["families"]).assert().success();
+}
+
+#[test]
+fn a_config_path_that_cannot_be_read_fails_naming_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("fontgres")
+        .unwrap()
+        .env_clear()
+        .arg("--config")
+        .arg(dir.path())
+        .args(["--no-system-fonts", "families"])
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "cannot read config file {}: ",
+            dir.path().display()
+        )));
 }
 
 /// A directory holding Tuffy and `not-a-font.ttf`, a text file.

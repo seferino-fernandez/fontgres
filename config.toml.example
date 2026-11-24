@@ -4,7 +4,8 @@
 # named either way must exist; the default location may be absent).
 # Precedence: CLI flag > FONTGRES_* env > this file > defaults.
 # A list (dirs, files) is taken whole from the highest layer that sets it.
-# Invalid values fail at startup naming their source.
+# Invalid values fail at startup naming their source, and so does a key or
+# table this file does not list here. The fontgres CLI accepts [mcp] unread.
 
 [fonts]
 # Load the fonts installed on this system. Env: FONTGRES_FONTS_SYSTEM
@@ -32,8 +33,8 @@ files = []
 [log]
 # trace|debug|info|warn|error|off. Env: FONTGRES_LOG_LEVEL
 # Unset by default: the fontgres CLI then logs errors only and fontgres-mcp logs info.
-# -v/-q override this; RUST_LOG overrides everything. An invalid value prints a
-# warning and falls back to the binary's default.
+# -v/-q override this; RUST_LOG overrides everything. An invalid value fails at
+# startup.
 # level = "info"
 
 [mcp]

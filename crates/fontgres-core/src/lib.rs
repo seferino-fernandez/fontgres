@@ -108,7 +108,9 @@ listings.\n\
 - [`env`](mod@env): the environment-variable source the configuration reads \
 through, and its typed parsers.\n\
 - [`error`]: [`Error`] and [`ConfigError`].\n\
-- [`cli`]: the `completions` and `man` subcommand helpers.\n"
+- [`cli`]: what the binaries do the same way at startup: the flags they \
+share, the `completions` and `man` subcommands, the configuration load and \
+the logging setup.\n"
 )]
 
 extern crate alloc;
@@ -1708,7 +1710,7 @@ pub mod error;
 pub mod models;
 
 #[cfg(feature = "cli")]
-pub use config::{Config, ConfigOverrides, ConfigPathSource, FontsConfig};
+pub use config::{Config, FontsConfig};
 #[cfg(feature = "cli")]
 pub use error::{ConfigError, Error};
 

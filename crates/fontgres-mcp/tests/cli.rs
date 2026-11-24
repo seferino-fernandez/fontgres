@@ -90,6 +90,24 @@ fn missing_env_config_file_is_an_error_naming_the_variable() {
         ));
 }
 
+/// The server reads its own table strictly, where `fontgres` accepts it
+/// unread.
+#[test]
+fn an_unknown_mcp_key_keeps_the_server_from_starting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "[fonts]\nsystem = false\n[mcp]\nbogus = 1\n").unwrap();
+    Command::cargo_bin("fontgres-mcp")
+        .unwrap()
+        .env_clear()
+        .arg("--config")
+        .arg(&config)
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(contains("line 4, column 1: unknown field `bogus`"));
+}
+
 /// The server does not start on a font file that holds no font: it would
 /// serve without a font its configuration names.
 #[test]
