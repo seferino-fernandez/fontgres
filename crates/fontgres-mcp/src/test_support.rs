@@ -1,13 +1,13 @@
 //! The one test harness for calling MCP tools.
 //!
 //! Every tool test calls through [`ServerHandler::call_tool`], the path a real
-//! request takes, so the argument check and the response budget apply exactly
-//! as they do in production.
+//! request takes, so the arguments are read and the response budget applies
+//! exactly as they do in production.
 
-use super::handler::AppTools;
+use crate::server::Server;
 use fontgres_core::{Database, FaceInfo, FontsConfig, Language, Weight};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Extensions, JsonObject, NumberOrString,
+    CallToolRequestParams, CallToolResponse, CallToolResult, JsonObject, NumberOrString,
 };
 use rmcp::service::{RequestContext, serve_directly};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -18,17 +18,10 @@ use std::sync::LazyLock;
 /// The production default response budget, 1 MiB.
 const DEFAULT_RESPONSE_BYTES: usize = 1024 * 1024;
 
-/// How a request was authenticated, as the tool handler sees it.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Caller {
-    /// A local client using standard input and output.
-    Stdio,
-}
-
-/// Tools over a database holding only the test font, Tuffy.ttf, with the
+/// A server over a database holding only the test font, Tuffy.ttf, with the
 /// production 1 MiB budget.
-pub(crate) fn tools() -> AppTools {
-    tools_with_budget(DEFAULT_RESPONSE_BYTES)
+pub(crate) fn server() -> Server {
+    server_with_budget(DEFAULT_RESPONSE_BYTES)
 }
 
 /// Tuffy.ttf, the one font file the tests load.
@@ -36,15 +29,15 @@ fn test_font() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../fontgres-core/tests/fonts/Tuffy.ttf")
 }
 
-/// [`tools`] with a response budget of `max_response_bytes`.
-pub(crate) fn tools_with_budget(max_response_bytes: usize) -> AppTools {
+/// [`server`] with a response budget of `max_response_bytes`.
+pub(crate) fn server_with_budget(max_response_bytes: usize) -> Server {
     let fonts = FontsConfig {
         system: false,
         files: vec![test_font()],
         ..FontsConfig::default()
     };
     let database = fonts.build_database().expect("the test font loads");
-    AppTools::new(database, max_response_bytes)
+    Server::new(database, max_response_bytes)
 }
 
 /// The test font's face, loaded from memory, so it has no path and
@@ -66,35 +59,25 @@ pub(crate) fn face(family: &str, weight: u16) -> FaceInfo {
     face
 }
 
-/// Tools over a database holding `faces`, loaded in that order, with a
+/// A server over a database holding `faces`, loaded in that order, with a
 /// response budget of `max_response_bytes`.
-pub(crate) fn tools_over(
+pub(crate) fn server_over(
     faces: impl IntoIterator<Item = FaceInfo>,
     max_response_bytes: usize,
-) -> AppTools {
+) -> Server {
     let mut database = Database::new();
     for face in faces {
         database.push_face_info(face);
     }
-    AppTools::new(database, max_response_bytes)
+    Server::new(database, max_response_bytes)
 }
 
-/// A request context for the selected caller. The connection serving the peer
+/// A request context for a call to `server`. The connection serving the peer
 /// closes on return.
-pub(crate) fn context(tools: &AppTools, caller: Caller) -> RequestContext<RoleServer> {
+pub(crate) fn context(server: &Server) -> RequestContext<RoleServer> {
     let (server_transport, _client_transport) = tokio::io::duplex(4096);
-    let running = serve_directly::<RoleServer, _, _, _, _>(tools.clone(), server_transport, None);
-    let mut context = RequestContext::new(NumberOrString::Number(1), running.peer().clone());
-    context.extensions = request_extensions(caller);
-    context
-}
-
-/// The extensions a request from `caller` carries: none over stdio; HTTP
-/// request parts otherwise.
-fn request_extensions(caller: Caller) -> Extensions {
-    match caller {
-        Caller::Stdio => Extensions::default(),
-    }
+    let running = serve_directly::<RoleServer, _, _, _, _>(server.clone(), server_transport, None);
+    RequestContext::new(NumberOrString::Number(1), running.peer().clone())
 }
 
 /// `arguments` as the object a tool call carries.
@@ -105,25 +88,24 @@ pub(crate) fn arguments(arguments: Value) -> JsonObject {
     object
 }
 
-/// Calls tool `name` as `caller` through [`ServerHandler::call_tool`].
+/// Calls tool `name` through [`ServerHandler::call_tool`].
 pub(crate) async fn call(
-    tools: &AppTools,
-    caller: Caller,
+    server: &Server,
     name: &str,
     arguments: Value,
 ) -> Result<CallToolResponse, McpError> {
     ServerHandler::call_tool(
-        tools,
+        server,
         CallToolRequestParams::new(name.to_string()).with_arguments(self::arguments(arguments)),
-        context(tools, caller),
+        context(server),
     )
     .await
 }
 
-/// Calls tool `name` over stdio and returns its result, panicking on a
-/// protocol error or a response that is not complete.
-pub(crate) async fn call_tool(tools: &AppTools, name: &str, arguments: Value) -> CallToolResult {
-    complete(call(tools, Caller::Stdio, name, arguments).await)
+/// Calls tool `name` and returns its result, panicking on a protocol error or
+/// a response that is not complete.
+pub(crate) async fn call_tool(server: &Server, name: &str, arguments: Value) -> CallToolResult {
+    complete(call(server, name, arguments).await)
 }
 
 /// The result a [`call`] completed with, panicking on a protocol error or a
@@ -156,14 +138,14 @@ pub(crate) fn first_text(result: &CallToolResult) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_tool, first_text, tools_with_budget};
+    use super::{call_tool, first_text, server_with_budget};
     use serde_json::{Value, json};
 
     #[tokio::test]
     async fn harness_call_tool_applies_the_response_budget() {
-        let tools = tools_with_budget(300);
+        let server = server_with_budget(300);
 
-        let result = call_tool(&tools, "fontgres_list_faces", json!({})).await;
+        let result = call_tool(&server, "fontgres_list_faces", json!({})).await;
 
         let body: Value =
             serde_json::from_str(first_text(&result)).expect("the guard text is JSON");

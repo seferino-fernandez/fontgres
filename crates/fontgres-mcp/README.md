@@ -19,14 +19,13 @@ and man pages), `cargo binstall fontgres-mcp` (prebuilt binary) or
 `cargo install fontgres-mcp` (from source). Archives for Linux, macOS and Windows
 are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
 
-## Transports
-
-- `stdio` for Claude Desktop, Claude Code, and other local MCP clients
-
 ## Quick start
 
+The server talks to its client over standard input and output, as Claude
+Desktop, Claude Code and other local MCP clients start it.
+
 ```bash
-fontgres-mcp --transport stdio
+fontgres-mcp
 fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 ```
 
@@ -37,7 +36,7 @@ fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 
 `RUST_LOG` -> `-v`/`-q` (when passed) -> `FONTGRES_LOG_LEVEL` / config `log.level` -> default (`info`)
 
-So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
+So `fontgres-mcp -q` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
 configured level keeps the server from starting. Logs go to stderr,
 including the warning for a font file or face that cannot be loaded.
@@ -80,8 +79,10 @@ Both list tools take `offset` and `limit` and return one page:
 
 Every call goes through the same checks, in order:
 
-1. **Arguments.** An argument the tool's input schema does not declare is
-   refused. Every params struct also denies unknown fields.
+1. **Arguments.** The arguments are read into the tool's parameters. An
+   argument the tool does not declare, which its closed input schema rules
+   out, is refused with an error that names it and lists the ones the tool
+   takes.
 1. **Response budget.** The whole serialized result, `content` and
    `structuredContent` together, is capped at `max_response_bytes` (default
    1 MiB). A page of a listing is cut to fit. Any other result over the cap,

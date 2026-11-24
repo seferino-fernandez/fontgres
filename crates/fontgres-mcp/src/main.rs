@@ -5,18 +5,20 @@
 
 #![doc = include_str!("../README.md")]
 
-mod auth;
 mod config;
-mod shared;
-mod stdio;
+mod server;
+#[cfg(test)]
+mod test_support;
 mod tools;
 
-use fontgres_core::cli::{self, LevelFilter, Logging};
+use anyhow::Context as _;
+use clap::Parser;
+use fontgres_core::cli::{self, LevelFilter, Logging, SetupCommand, SharedArgs};
 use fontgres_core::env::SystemEnv;
-use shared::Args;
+use rmcp::ServiceExt as _;
 
-use crate::auth::Transport;
 use crate::config::ServerConfig;
+use crate::server::Server;
 
 /// The server reports its start and what it serves unless `-v`/`-q`,
 /// `FONTGRES_LOG_LEVEL` or `[log] level` says otherwise.
@@ -24,6 +26,22 @@ const LOGGING: Logging<'_> = Logging {
     default_level: LevelFilter::INFO,
     targets: &["fontgres_core", "fontgres_mcp", "rmcp"],
 };
+
+/// CLI arguments for the MCP server.
+#[derive(Parser)]
+#[command(
+    name = "fontgres-mcp",
+    about = "MCP server for querying installed fonts",
+    version
+)]
+struct Args {
+    /// Optional subcommand. When omitted, the MCP server runs.
+    #[command(subcommand)]
+    command: Option<SetupCommand>,
+
+    #[command(flatten)]
+    shared: SharedArgs,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,14 +57,34 @@ async fn main() -> anyhow::Result<()> {
     args.shared
         .start_logging(&LOGGING, config.core.log, &SystemEnv);
 
-    tracing::info!(
-        transport = %args.transport,
-        "fontgres-mcp starting"
-    );
+    tracing::info!("fontgres-mcp starting");
+    serve(&config).await
+}
 
-    match args.transport {
-        Transport::Stdio => stdio::serve(&config).await?,
-    }
-
+/// Loads the configured fonts, then serves the tools over standard input and
+/// output until the client closes them.
+async fn serve(config: &ServerConfig) -> anyhow::Result<()> {
+    let fonts = config.core.fonts.clone();
+    // Scanning system fonts reads many files, so keep it off the async runtime.
+    let database = tokio::task::spawn_blocking(move || fonts.build_database())
+        .await
+        .context("loading fonts")?
+        .context("loading fonts")?;
+    tracing::info!(faces = database.len(), "fonts loaded");
+    let server = Server::new(database, config.mcp.max_response_bytes);
+    let service = server.serve(rmcp::transport::io::stdio_pipes()).await?;
+    service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        use clap::CommandFactory as _;
+
+        Args::command().debug_assert();
+    }
 }
