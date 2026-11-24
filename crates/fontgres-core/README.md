@@ -58,14 +58,16 @@ The `cli` feature adds what the CLI and MCP server have in common:
 - `config`: layered configuration (CLI flag -> `FONTGRES_*` env -> `config.toml`
   -> defaults) for which fonts to load (`[fonts] system/dirs/files`), the CSS
   generic families (`[fonts.generic]`) and logging (`[log]`). A bad env value,
-  a missing `--config`/`FONTGRES_CONFIG` file or invalid TOML is an error naming
-  its source.
+  a missing or unreadable `--config`/`FONTGRES_CONFIG` file, invalid TOML and a
+  key or table the file does not expect are each an error naming its source.
 - `models`: `FontsConfig::build_database`, which fails on a font directory it
   cannot read and on a named font file that gives no face, and logs a warning
   for any other file or face it cannot load; the serializable `Face` view with
   CSS keywords for style and stretch, `FontQuery` (CSS generic names resolve
   through the configured families), and the face and family listings.
-- `cli`: the `completions` and `man` subcommand helpers.
+- `cli`: what the binaries do the same way at startup: the flags they share,
+  the `completions` and `man` subcommands, the one configuration load, and
+  the logging setup.
 
 The `schema` feature derives `schemars::JsonSchema` on the views for MCP
 output schemas.

@@ -1,19 +1,16 @@
 //! Server configuration: core config + MCP-specific settings.
 //!
-//! [`ServerConfig`] embeds the core [`Config`] and adds an
-//! [`McpConfig`] for the MCP server. Both are loaded
-//! from the same `config.toml`: core tables such as `[fonts]` and `[log]`,
-//! MCP fields under `[mcp]`. Environment overrides use the `FONTGRES_MCP_*`
-//! prefix. CLI flags arrive as [`ServerOverrides`], the top layer above all of
-//! these.
+//! [`ServerConfig`] holds the core [`Config`] and an [`McpConfig`] for the
+//! MCP server. One read of `config.toml` gives both: core tables such as
+//! `[fonts]` and `[log]`, MCP fields under `[mcp]`. Environment overrides
+//! use the `FONTGRES_MCP_*` prefix.
 
-use fontgres_core::env::{Env, SystemEnv, env_parse};
-use fontgres_core::{Config, ConfigOverrides};
+use fontgres_core::Config;
+use fontgres_core::cli::SharedArgs;
+use fontgres_core::env::{Env, env_parse};
 use serde::Deserialize;
 use std::fmt::{Debug, Formatter};
-use std::path::Path;
 
-use crate::auth::Transport;
 const ENV_MCP_MAX_RESPONSE_BYTES: &str = "FONTGRES_MCP_MAX_RESPONSE_BYTES";
 
 /// Default cap on serialized tool-result size: 1 MiB. Generous enough not to
@@ -22,7 +19,7 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// MCP-server-specific settings.
 #[derive(Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct McpConfig {
     /// Maximum exact serialized size (bytes) of a tool result. Results
     /// exceeding this are replaced with a bounded `response_too_large` error;
@@ -56,54 +53,13 @@ pub(crate) struct ServerConfig {
     pub mcp: McpConfig,
 }
 
-/// Explicit values that sit above every other layer: the server's CLI flags.
-///
-/// Each one beats the matching env var and TOML setting.
-#[derive(Debug, Default)]
-pub(crate) struct ServerOverrides {
-    /// Core overrides (the font flags).
-    pub core: ConfigOverrides,
-}
-
-/// On-disk shape used only to extract the `[mcp]` table; core fields are parsed
-/// by [`Config`].
-#[derive(Debug, Default, Deserialize)]
-struct McpConfigFile {
-    #[serde(default)]
-    mcp: McpConfig,
-}
-
 impl ServerConfig {
-    /// Loads core config + `[mcp]` from `path` (or default), then env, then
-    /// `overrides`.
-    ///
-    /// A file named by `path` or `FONTGRES_CONFIG` must exist, as in
-    /// [`Config::load`]; a missing file at a default location means defaults.
-    ///
-    /// Reads environment variables from the real process environment via
-    /// [`SystemEnv`]. For test injection, see [`ServerConfig::load_with_env`].
-    pub(crate) fn load(
-        path: Option<&Path>,
-        overrides: &ServerOverrides,
-        transport: Transport,
-    ) -> anyhow::Result<Self> {
-        Self::load_with_env(path, overrides, &SystemEnv, transport)
-    }
-
-    /// Like [`ServerConfig::load`], but reads env vars from the given [`Env`].
-    pub(crate) fn load_with_env(
-        path: Option<&Path>,
-        overrides: &ServerOverrides,
-        env: &impl Env,
-        transport: Transport,
-    ) -> anyhow::Result<Self> {
-        let core = Config::load_with_env(path, &overrides.core, env)?;
-        let mut mcp = Config::read_config_file::<McpConfigFile>(path, env)?.mcp;
-
+    /// Loads the configuration `args` select, as
+    /// [`SharedArgs::load_config`] does, with the `[mcp]` table and the
+    /// `FONTGRES_MCP_*` variables, read through `env`, on top of it.
+    pub(crate) fn load(args: &SharedArgs, env: &impl Env) -> anyhow::Result<Self> {
+        let (core, mut mcp) = args.load_config::<McpConfig>(env)?;
         apply_mcp_env(&mut mcp, env)?;
-        match transport {
-            Transport::Stdio => {}
-        }
         Ok(Self { core, mcp })
     }
 }
@@ -140,8 +96,8 @@ mod tests {
         env_with_toml("")
     }
 
-    fn load_stdio(env: &MapEnv) -> anyhow::Result<ServerConfig> {
-        ServerConfig::load_with_env(None, &ServerOverrides::default(), env, Transport::Stdio)
+    fn load(env: &MapEnv) -> anyhow::Result<ServerConfig> {
+        ServerConfig::load(&SharedArgs::default(), env)
     }
 
     #[test]
@@ -153,16 +109,16 @@ mod tests {
     #[test]
     fn max_response_bytes_env_beats_toml() {
         let (_directory, env) = env_with_toml("[mcp]\nmax_response_bytes = 2048\n");
-        assert_eq!(load_stdio(&env).unwrap().mcp.max_response_bytes, 2048);
+        assert_eq!(load(&env).unwrap().mcp.max_response_bytes, 2048);
         let env = env.with("FONTGRES_MCP_MAX_RESPONSE_BYTES", "4096");
-        assert_eq!(load_stdio(&env).unwrap().mcp.max_response_bytes, 4096);
+        assert_eq!(load(&env).unwrap().mcp.max_response_bytes, 4096);
     }
 
     #[test]
     fn invalid_max_response_bytes_env_fails_naming_variable_and_value() {
         let (_directory, env) = isolated_env();
         let env = env.with("FONTGRES_MCP_MAX_RESPONSE_BYTES", "lots");
-        let err = load_stdio(&env).unwrap_err();
+        let err = load(&env).unwrap_err();
         assert!(
             err.to_string()
                 .contains(r#"invalid FONTGRES_MCP_MAX_RESPONSE_BYTES value "lots""#),
@@ -174,7 +130,7 @@ mod tests {
     fn core_tables_load_from_the_same_file() {
         let (_directory, env) =
             env_with_toml("[fonts]\nsystem = false\n[mcp]\nmax_response_bytes = 10\n");
-        let config = load_stdio(&env).unwrap();
+        let config = load(&env).unwrap();
         assert!(!config.core.fonts.system);
         assert_eq!(config.mcp.max_response_bytes, 10);
     }
@@ -183,17 +139,70 @@ mod tests {
     fn missing_explicit_config_file_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("typo.toml");
-        let err = ServerConfig::load_with_env(
-            Some(&missing),
-            &ServerOverrides::default(),
-            &MapEnv::new(),
-            Transport::Stdio,
-        )
-        .unwrap_err();
+        let args = SharedArgs {
+            config: Some(missing.clone()),
+            ..SharedArgs::default()
+        };
+        let err = ServerConfig::load(&args, &MapEnv::new()).unwrap_err();
         assert!(
             err.to_string()
                 .contains(&format!("config file {} does not exist", missing.display())),
             "{err}"
         );
+    }
+
+    #[test]
+    fn an_unknown_mcp_key_is_an_error_naming_it() {
+        let (_directory, env) = env_with_toml("[mcp]\nmax_response_byts = 10\n");
+        let err = load(&env).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("line 2, column 1: unknown field `max_response_byts`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn the_font_flags_reach_the_core_config() {
+        let (_directory, env) = env_with_toml("[fonts]\ndirs = [\"/toml\"]\n");
+        let args = SharedArgs {
+            font_dirs: vec!["/flag".into()],
+            no_system_fonts: true,
+            ..SharedArgs::default()
+        };
+        let fonts = ServerConfig::load(&args, &env).unwrap().core.fonts;
+        assert!(!fonts.system);
+        assert_eq!(fonts.dirs, [std::path::Path::new("/flag")]);
+    }
+
+    /// Every setting the example file shows, commented out or not, is one
+    /// the server reads.
+    #[test]
+    fn every_setting_in_the_example_config_file_loads() {
+        let example = include_str!("../../../config.toml.example");
+        let is_setting = |line: &str| {
+            line.split_once(" = ").is_some_and(|(key, _)| {
+                key.chars()
+                    .all(|letter| letter.is_ascii_lowercase() || letter == '_')
+            })
+        };
+        let settings: Vec<&str> = example
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(setting) if is_setting(setting) => setting,
+                _ => line,
+            })
+            .collect();
+        let (_directory, env) = env_with_toml(&settings.join("\n"));
+
+        let config = load(&env).unwrap();
+        let generic = &config.core.fonts.generic;
+        assert_eq!(generic.sans_serif.as_deref(), Some("Arial"));
+        assert_eq!(generic.monospace.as_deref(), Some("Courier New"));
+        assert_eq!(
+            config.core.log.level.map(|level| level.to_string()),
+            Some("info".into())
+        );
+        assert_eq!(config.mcp.max_response_bytes, 1024 * 1024);
     }
 }

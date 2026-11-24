@@ -80,8 +80,11 @@ and files, and the families the CSS generic names resolve to) and the log level.
 See [`config.toml.example`](config.toml.example) for every setting. Mistakes
 fail at startup: an env value that does not parse is an error naming the
 variable, a config file named by `--config` or `FONTGRES_CONFIG` must exist, a
-font directory or file that cannot be read is named, as is a font file that
-holds no font, and a TOML error reports the line and column.
+config file that cannot be read is named, as is a font directory or file that
+cannot be read and a font file that holds no font, and a TOML error reports
+the line and column. A key or table the file does not expect is such an error,
+so a misspelt setting never silently does nothing. One file serves both
+binaries: `fontgres` accepts the server's `[mcp]` table without reading it.
 
 ## Logging and verbosity flag
 
@@ -92,8 +95,9 @@ highest first:
 `RUST_LOG` → `-v`/`-q` (when passed) → `FONTGRES_LOG_LEVEL` / `[log] level` → built-in default
 
 The built-in default is `error` for the `fontgres` CLI and `info` for the
-`fontgres-mcp` server. An invalid configured level prints a warning and falls back
-to that default. Place the flag before the subcommand: `fontgres -v faces`.
+`fontgres-mcp` server. An invalid level in `FONTGRES_LOG_LEVEL` or `[log] level`
+fails at startup, as any other invalid setting does, even when a flag would
+override it. The flags are accepted before or after the subcommand.
 `RUST_LOG` overrides everything (e.g. `RUST_LOG=fontgres_core=trace`). The
 warning for a font file or face that cannot be loaded follows the same level.
 

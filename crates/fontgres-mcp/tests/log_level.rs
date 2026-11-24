@@ -76,15 +76,20 @@ fn verbosity_flag_beats_configured_level() {
 }
 
 #[test]
-fn invalid_log_level_warns_and_falls_back_to_info() {
+fn an_invalid_log_level_keeps_the_server_from_starting() {
     let stderr = startup_stderr("", |command| {
         command.env("FONTGRES_LOG_LEVEL", "loud");
     });
     assert!(
-        contains("fontgres-mcp: warning: ignoring invalid log level \"loud\"")
-            .and(contains("using info"))
-            .eval(&stderr),
+        contains(
+            "invalid FONTGRES_LOG_LEVEL value \"loud\": expected trace, debug, info, warn, \
+             error or off"
+        )
+        .eval(&stderr),
         "stderr: {stderr}"
     );
-    assert!(contains(STARTUP_LINE).eval(&stderr), "stderr: {stderr}");
+    assert!(
+        contains(STARTUP_LINE).not().eval(&stderr),
+        "stderr: {stderr}"
+    );
 }

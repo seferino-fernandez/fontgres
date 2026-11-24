@@ -31,11 +31,8 @@ path = "src/main.rs"
 fontgres-core = { workspace = true, features = ["cli"] }
 serde.workspace = true
 serde_json.workspace = true
-tracing-subscriber.workspace = true
 anyhow.workspace = true
 clap = { workspace = true }
-clap_complete = { workspace = true }
-clap-verbosity-flag = { workspace = true }
 comfy-table.workspace = true
 
 [dev-dependencies]
