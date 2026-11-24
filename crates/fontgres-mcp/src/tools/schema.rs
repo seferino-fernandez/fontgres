@@ -166,6 +166,18 @@ mod tests {
     }
 
     #[test]
+    fn closes_a_schema_with_only_an_object_type_or_only_properties() {
+        for mut schema in [
+            json!({"type": "object"}),
+            json!({"properties": {"a": {"type": "string"}}}),
+        ] {
+            close_object_schemas(&mut schema);
+            assert_eq!(schema["additionalProperties"], json!(false), "{schema}");
+            assert_eq!(schema["required"], json!([]), "{schema}");
+        }
+    }
+
+    #[test]
     fn preserves_existing_additional_properties() {
         let mut schema = json!({"type": "object", "additionalProperties": true});
         close_object_schemas(&mut schema);
@@ -175,7 +187,6 @@ mod tests {
 
 #[cfg(test)]
 mod router_tests {
-    use super::close_object_schemas;
     use crate::tools::test_support::tools;
     use rmcp::ServerHandler;
     use rmcp::model::Tool;
@@ -189,11 +200,10 @@ mod router_tests {
     #[test]
     fn every_listed_tool_schema_is_closed() {
         for tool in listed_tools() {
-            let mut v = Value::Object((*tool.input_schema).clone());
-            close_object_schemas(&mut v); // idempotent; asserts no panic
+            let v = &tool.input_schema;
             assert_eq!(
-                v["additionalProperties"],
-                Value::Bool(false),
+                v.get("additionalProperties"),
+                Some(&Value::Bool(false)),
                 "tool {} root schema must be closed",
                 tool.name
             );
@@ -213,27 +223,24 @@ mod router_tests {
     }
 
     #[test]
-    fn every_listed_tool_has_a_closeable_output_schema() {
+    fn every_listed_tool_has_a_closed_output_schema() {
         // Every tool returns `Json<T>`, so rmcp advertises an `outputSchema`.
-        // The MCP spec requires an object root, and closing must produce at
-        // least one `additionalProperties: false`.
+        // The MCP spec requires an object root, and the server lists it closed.
         for tool in listed_tools() {
             let output = tool
                 .output_schema
                 .as_ref()
                 .unwrap_or_else(|| panic!("tool {} must advertise an output schema", tool.name));
-            let mut v = Value::Object((**output).clone());
             assert!(
-                v.get("type").and_then(Value::as_str) == Some("object")
-                    || v.get("properties").is_some(),
-                "tool {} output schema must have an object root: {v}",
+                output.get("type").and_then(Value::as_str) == Some("object")
+                    || output.get("properties").is_some(),
+                "tool {} output schema must have an object root: {output:?}",
                 tool.name
             );
-            close_object_schemas(&mut v); // idempotent; asserts no panic
-            let serialized = v.to_string();
-            assert!(
-                serialized.contains("\"additionalProperties\":false"),
-                "tool {} output schema must have its object node(s) closed: {serialized}",
+            assert_eq!(
+                output.get("additionalProperties"),
+                Some(&Value::Bool(false)),
+                "tool {} output schema must be closed: {output:?}",
                 tool.name
             );
         }
