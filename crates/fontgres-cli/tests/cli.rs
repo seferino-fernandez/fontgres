@@ -165,6 +165,31 @@ fn table_and_csv_output_name_the_face() {
     }
 }
 
+/// A reader that closes stdout early, as `head` does, has all the output it
+/// wants: the run succeeds and reports nothing.
+#[test]
+fn a_closed_stdout_is_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    for format in ["table", "json", "csv"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fontgres"))
+            .env_clear()
+            .env("FONTGRES_CONFIG", &config)
+            .arg("--no-system-fonts")
+            .arg("--font-dir")
+            .arg(fonts_dir())
+            .args(["--output", format, "faces"])
+            .stdout(writer)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{format}: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "", "{format}");
+    }
+}
+
 #[test]
 fn query_prints_the_best_match_from_the_listed_families() {
     let dir = tempfile::tempdir().unwrap();

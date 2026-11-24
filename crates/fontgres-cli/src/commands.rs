@@ -37,22 +37,17 @@ pub(crate) fn faces(
         .into_iter()
         .map(Face::from)
         .collect();
-    match format {
-        OutputFormat::Json => output::print_json(&faces),
-        OutputFormat::Table => Ok(output::print_table(&FACE_HEADERS, &face_rows(&faces))?),
-        OutputFormat::Csv => Ok(output::print_csv(&FACE_HEADERS, &face_rows(&faces))?),
-    }
+    Ok(output::print(format, &faces, &FACE_HEADERS, || {
+        face_rows(&faces)
+    })?)
 }
 
 /// Lists the distinct family names in `database`.
 pub(crate) fn families(database: &Database, format: OutputFormat) -> anyhow::Result<()> {
     let names = models::family_names(database);
-    let rows: Vec<Vec<String>> = names.iter().map(|name| vec![(*name).to_owned()]).collect();
-    match format {
-        OutputFormat::Json => output::print_json(&names),
-        OutputFormat::Table => Ok(output::print_table(&["Family"], &rows)?),
-        OutputFormat::Csv => Ok(output::print_csv(&["Family"], &rows)?),
-    }
+    Ok(output::print(format, &names, &["Family"], || {
+        names.iter().map(|name| vec![(*name).to_owned()]).collect()
+    })?)
 }
 
 /// Prints the face that best matches `query`, failing when none does.
@@ -62,11 +57,9 @@ pub(crate) fn query(
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     let face = query.run(database)?;
-    match format {
-        OutputFormat::Json => output::print_json(&face),
-        OutputFormat::Table => Ok(output::print_table(&FACE_HEADERS, &face_rows(&[face]))?),
-        OutputFormat::Csv => Ok(output::print_csv(&FACE_HEADERS, &face_rows(&[face]))?),
-    }
+    Ok(output::print(format, &face, &FACE_HEADERS, || {
+        face_rows(core::slice::from_ref(&face))
+    })?)
 }
 
 /// One table or CSV row per face, in [`FACE_HEADERS`] order.
