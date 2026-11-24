@@ -14,10 +14,16 @@ data or the system into a `Database`, then list them or match one with a
   new database.
 - Faces are kept in load order. `faces()` returns them as a slice, an `ID` is a
   face's position in it, and a query that finds several equally good faces
-  returns the one loaded first. A directory loads in the order of its file
-  names, so that order is the same on every machine.
+  returns the one named Regular or Roman if exactly one is, else the one
+  loaded first. A directory loads in the order of its file names, so that
+  order is the same on every machine.
 - `query` returns the face, not its ID, and `family_faces` returns every face
   of a family.
+- `FaceInfo` has the face's `subfamily` name, such as Bold Italic. Weight and
+  style come from the `OS/2` table, then from `head.macStyle` when a face has
+  no `OS/2` table, then from the words Bold, Italic and Oblique in the
+  subfamily name when the tables say normal. A declared weight of 0 is read as
+  400 and one above 1000 as 1000.
 - `Source::File` holds a shared path. `Source::SharedFile`,
   `make_shared_face_data`, `make_face_data_unshared` and `face_source` are
   gone.

@@ -106,8 +106,9 @@ fn files_and_subdirectories_load_in_one_file_name_order() {
     assert_eq!(paths_loaded_from(dir.path()).unwrap(), expected);
 }
 
-/// Two files hold the same face, so a query for it is a tie, which the face
-/// loaded first wins: the one whose file name sorts first.
+/// Three files hold the same face, so a query for it is a tie their names do
+/// not settle, which the face loaded first wins: the one whose file name
+/// sorts first.
 #[test]
 fn a_tie_between_two_files_goes_to_the_first_file_name() {
     use fontgres_core::{Family, Query, Source};

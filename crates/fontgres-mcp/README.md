@@ -52,9 +52,10 @@ servers can tell this one's tools apart.
 | `fontgres_list_families` | List the distinct family names, a page at a time                   | Yes |
 | `fontgres_query_font`    | Best face for `families`, `weight`, `style`, `stretch` (CSS-like) | Yes |
 
-Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1-1000),
-`style` (`normal`, `italic`, `oblique`), `stretch` (`ultra-condensed` ...
-`ultra-expanded`), `monospaced`, `path` and `index`. Family names in a query
+Faces carry `family`, `families`, `subfamily` (such as `Bold Italic`),
+`post_script_name`, `weight` (CSS 1-1000), `style` (`normal`, `italic`,
+`oblique`), `stretch` (`ultra-condensed` ... `ultra-expanded`), `monospaced`,
+`path` and `index`. Family names in a query
 match ignoring ASCII case; the generic names `serif`, `sans-serif`,
 `cursive`, `fantasy` and `monospace` resolve through `[fonts.generic]`.
 

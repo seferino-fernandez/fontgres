@@ -15,8 +15,9 @@ pub(crate) struct FacesArgs {
 }
 
 /// Table and CSV columns for a face.
-const FACE_HEADERS: [&str; 8] = [
+const FACE_HEADERS: [&str; 9] = [
     "Family",
+    "Subfamily",
     "PostScript name",
     "Weight",
     "Style",
@@ -75,6 +76,7 @@ fn face_rows(faces: &[Face]) -> Vec<Vec<String>> {
         .map(|face| {
             vec![
                 face.family.clone(),
+                face.subfamily.clone(),
                 face.post_script_name.clone(),
                 face.weight.to_string(),
                 keyword(&face.style),
@@ -113,6 +115,7 @@ mod tests {
         let face = Face {
             family: "Tuffy".into(),
             families: vec!["Tuffy".into()],
+            subfamily: "Bold Oblique".into(),
             post_script_name: "Tuffy-Bold".into(),
             style: Style::Oblique,
             weight: 700,
@@ -126,6 +129,7 @@ mod tests {
             rows,
             [[
                 "Tuffy",
+                "Bold Oblique",
                 "Tuffy-Bold",
                 "700",
                 "oblique",

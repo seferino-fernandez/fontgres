@@ -15,12 +15,27 @@ fn face(stretch: Stretch, style: Style, weight: u16) -> FaceInfo {
         source: Source::Binary(Arc::new(Vec::<u8>::new())),
         index: 0,
         families: vec![(FAMILY.to_owned(), Language::English_UnitedStates)],
+        subfamily: String::new(),
         post_script_name: format!("{FAMILY}-{stretch:?}-{style:?}-{weight}"),
         style,
         weight: Weight(weight),
         stretch,
         monospaced: false,
     }
+}
+
+/// A face at normal stretch and style with the `subfamily` name.
+fn named(subfamily: &str, weight: u16) -> FaceInfo {
+    FaceInfo {
+        subfamily: subfamily.to_owned(),
+        ..face(Stretch::Normal, Style::Normal, weight)
+    }
+}
+
+/// Loads `faces` in order and returns the one the query picks at normal
+/// stretch, style and weight.
+fn pick_normal(faces: &[FaceInfo]) -> Option<usize> {
+    pick(faces, Stretch::Normal, Style::Normal, 400)
 }
 
 /// Loads `faces` in order and returns the one the query picks, as an index
@@ -211,4 +226,44 @@ fn the_first_loaded_of_equal_faces_wins() {
         face(Stretch::Normal, Style::Normal, 400),
     ];
     assert_eq!(pick(&faces, Stretch::Normal, Style::Normal, 400), Some(0));
+}
+
+#[test]
+fn a_tie_goes_to_the_one_face_named_regular_or_roman() {
+    for plain in ["Regular", "Roman", "regular", "ROMAN"] {
+        let faces = [named("Ornaments", 400), named(plain, 400), named("", 400)];
+        assert_eq!(pick_normal(&faces), Some(1), "{plain}");
+    }
+}
+
+/// A longer name that starts or ends with the word is not the plain name.
+#[test]
+fn a_tie_without_a_face_named_regular_or_roman_goes_to_the_first_loaded() {
+    for names in [["Light", "Medium"], ["Inline", "Regular Condensed"]] {
+        let faces = names.map(|name| named(name, 400));
+        assert_eq!(pick_normal(&faces), Some(0), "{names:?}");
+    }
+}
+
+#[test]
+fn a_tie_with_several_faces_named_regular_or_roman_goes_to_the_first_loaded() {
+    for names in [
+        ["Book", "Roman", "Regular"],
+        ["Regular", "Regular", "Light"],
+    ] {
+        let faces = names.map(|name| named(name, 400));
+        assert_eq!(pick_normal(&faces), Some(0), "{names:?}");
+    }
+}
+
+/// The name settles a tie only: a face named Regular that matches the query
+/// less well does not win.
+#[test]
+fn a_face_named_regular_outside_the_tie_does_not_win() {
+    let faces = [
+        named("Light", 400),
+        named("Medium", 400),
+        named("Regular", 700),
+    ];
+    assert_eq!(pick_normal(&faces), Some(0));
 }

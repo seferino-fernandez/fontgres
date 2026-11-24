@@ -135,14 +135,13 @@ macro_rules! css_keywords {
     };
 }
 
-mod ttf_parser;
+mod face_reader;
 
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
+pub use face_reader::{Language, Stretch};
 pub use generic_family::{GenericFamilies, GenericFamily};
-pub use ttf_parser::Language;
-pub use ttf_parser::Width as Stretch;
 
 /// Identifies a face within one [`Database`]: the face's position in the
 /// database's load order.
@@ -359,8 +358,8 @@ impl core::fmt::Display for FontLoadFailureReason {
 /// load the order that load documents. A collection adds its faces in the
 /// order the file holds them. [`faces`] and [`family_faces`] return faces in
 /// load order, an [`ID`] is a face's position in it, and when a [`query`]
-/// finds several faces equally good, the one loaded first wins. To drop
-/// faces, build a new database.
+/// finds several faces equally good and their names do not settle it, the
+/// one loaded first wins. To drop faces, build a new database.
 ///
 /// # Font files
 ///
@@ -778,7 +777,11 @@ impl Database {
     /// ignoring ASCII case, as [`FaceInfo::has_family`] does.
     ///
     /// When several faces of the family are equal in stretch, style and
-    /// weight, the one earliest in load order is returned.
+    /// weight, the one whose [`subfamily`](FaceInfo::subfamily) is *Regular*
+    /// or *Roman* is returned, ignoring ASCII case, if exactly one is. A
+    /// family's plain face and a face made for a special use, such as
+    /// *Ornaments*, often declare the same three properties. Otherwise the
+    /// one earliest in load order is returned.
     ///
     /// # Examples
     ///
@@ -916,6 +919,17 @@ pub struct FaceInfo {
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub families: Vec<(String, Language)>,
 
+    /// The face's subfamily name, which tells it from the other faces of its
+    /// family, such as *Bold Italic*; empty when the font has none.
+    ///
+    /// This is the English (United States) name when the font has one.
+    ///
+    /// Corresponds to a *Typographic Subfamily* (ID 17) or a *Font
+    /// Subfamily* (ID 2) [name ID] in a TrueType font.
+    ///
+    /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
+    pub subfamily: String,
+
     /// The face's PostScript name.
     ///
     /// Corresponds to a *PostScript name* (6) [name ID] in a TrueType font.
@@ -927,14 +941,20 @@ pub struct FaceInfo {
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub post_script_name: String,
 
-    /// The face's style.
+    /// The face's style, as its `OS/2` table declares it.
     ///
-    /// A face whose `OS/2` table declares it normal but whose `post` table
-    /// gives an italic angle is [`Style::Italic`].
+    /// A face that table leaves normal is [`Style::Italic`] when its `post`
+    /// table gives an italic angle, and takes the style its subfamily name
+    /// has as a word, Italic or Oblique. A face without an `OS/2` table is
+    /// also italic when its `head` table flags it.
     pub style: Style,
 
-    /// The face's weight, as its `OS/2` table declares it, or
-    /// [`Weight::NORMAL`] when it has none.
+    /// The face's weight, as its `OS/2` table declares it, from 1 to 1000.
+    ///
+    /// A declared 0 is [`Weight::NORMAL`] and a weight above 1000 is 1000. A
+    /// face without an `OS/2` table is [`Weight::BOLD`] when its `head`
+    /// table flags it bold, and normal otherwise. A face that leaves at
+    /// normal weight is bold when its subfamily name has the word Bold.
     pub weight: Weight,
 
     /// The face's stretch, as its `OS/2` table declares it, or
@@ -942,7 +962,7 @@ pub struct FaceInfo {
     pub stretch: Stretch,
 
     /// Whether the face's `post` table declares it monospaced; `false` when it
-    /// has none.
+    /// has none, or one too short to say.
     pub monospaced: bool,
 }
 
@@ -1139,10 +1159,21 @@ type ParsedFaces = Vec<Result<FaceInfo, FontLoadFailure>>;
 
 /// Parses every face of the font in `data`, which `source` holds or locates.
 fn parse_faces(source: &Source, data: &[u8]) -> ParsedFaces {
-    let n = ttf_parser::fonts_in_collection(data).unwrap_or(1);
-    (0..n)
+    (0..face_reader::face_count(data))
         .map(|index| {
-            parse_face_info(source.clone(), data, index)
+            face_reader::read(data, index)
+                .map(|properties| FaceInfo {
+                    id: ID::dummy(),
+                    source: source.clone(),
+                    index,
+                    families: properties.families,
+                    subfamily: properties.subfamily,
+                    post_script_name: properties.post_script_name,
+                    style: properties.style,
+                    weight: properties.weight,
+                    stretch: properties.stretch,
+                    monospaced: properties.monospaced,
+                })
                 .map_err(|reason| FontLoadFailure::of_face(source, index, reason))
         })
         .collect()
@@ -1401,191 +1432,15 @@ impl Default for Style {
     }
 }
 
-fn parse_face_info(
-    source: Source,
-    data: &[u8],
-    index: u32,
-) -> Result<FaceInfo, FontLoadFailureReason> {
-    let raw_face = ttf_parser::RawFace::parse(data, index)
-        .map_err(|_cause| FontLoadFailureReason::MalformedFont)?;
-    let (families, post_script_name) =
-        parse_names(&raw_face).ok_or(FontLoadFailureReason::NoFamilyName)?;
-    let (mut style, weight, stretch) = parse_os2(&raw_face);
-    let (monospaced, italic) = parse_post(&raw_face);
-
-    if style == Style::Normal && italic {
-        style = Style::Italic;
-    }
-
-    Ok(FaceInfo {
-        id: ID::dummy(),
-        source,
-        index,
-        families,
-        post_script_name,
-        style,
-        weight,
-        stretch,
-        monospaced,
-    })
-}
-
-fn parse_names(raw_face: &ttf_parser::RawFace<'_>) -> Option<(Vec<(String, Language)>, String)> {
-    const NAME_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"name");
-    let name_data = raw_face.table(NAME_TAG)?;
-    let name_table = ttf_parser::name::Table::parse(name_data)?;
-
-    let mut families = collect_families(ttf_parser::name_id::TYPOGRAPHIC_FAMILY, &name_table.names);
-
-    // We have to fallback to Family Name when no Typographic Family Name was set.
-    if families.is_empty() {
-        families = collect_families(ttf_parser::name_id::FAMILY, &name_table.names);
-    }
-
-    // Make English US the first one.
-    if let Some(index) = families
-        .iter()
-        .position(|f| f.1 == Language::English_UnitedStates)
-    {
-        families.swap(0, index);
-    }
-
-    let (first_family, _) = families.first()?;
-
-    // A font without a PostScript name still loads, with one made from its
-    // family as fontconfig makes it.
-    let post_script_name = name_table
-        .names
-        .into_iter()
-        .find(|name| {
-            name.id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_supported_encoding()
-        })
-        .and_then(|name| name_to_unicode(&name))
-        .unwrap_or_else(|| postscript_name::from_family(first_family));
-
-    Some((families, post_script_name))
-}
-
-fn collect_families(name_id: u16, names: &ttf_parser::name::Names<'_>) -> Vec<(String, Language)> {
-    let mut families = Vec::new();
-    for name in names.into_iter() {
-        if name.id == name_id
-            && name.is_unicode()
-            && let Some(family) = name_to_unicode(&name)
-        {
-            families.push((family, name.language()));
-        }
-    }
-
-    // If no Unicode English US family name was found then look for English MacRoman as well.
-    if !families
-        .iter()
-        .any(|f| f.1 == Language::English_UnitedStates)
-    {
-        for name in names.into_iter() {
-            if name.id == name_id
-                && name.is_mac_roman()
-                && let Some(family) = name_to_unicode(&name)
-            {
-                families.push((family, name.language()));
-                break;
-            }
-        }
-    }
-
-    families
-}
-
-fn name_to_unicode(name: &ttf_parser::name::Name<'_>) -> Option<String> {
-    if name.is_unicode() {
-        let mut raw_data: Vec<u16> = Vec::new();
-        for c in ttf_parser::LazyArray16::<u16>::new(name.data) {
-            raw_data.push(c);
-        }
-
-        String::from_utf16(&raw_data).ok()
-    } else if name.is_mac_roman() {
-        // We support only MacRoman encoding here, which should be enough in most cases.
-        let raw_data: Vec<u16> = name
-            .data
-            .iter()
-            .map(|&byte| mac_roman_to_utf16(byte))
-            .collect();
-
-        String::from_utf16(&raw_data).ok()
-    } else {
-        None
-    }
-}
-
-fn parse_os2(raw_face: &ttf_parser::RawFace<'_>) -> (Style, Weight, Stretch) {
-    const OS2_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"OS/2");
-    let Some(table) = raw_face
-        .table(OS2_TAG)
-        .and_then(ttf_parser::os2::Table::parse)
-    else {
-        return (Style::Normal, Weight::NORMAL, Stretch::Normal);
-    };
-
-    let style = match table.style() {
-        ttf_parser::Style::Normal => Style::Normal,
-        ttf_parser::Style::Italic => Style::Italic,
-        ttf_parser::Style::Oblique => Style::Oblique,
-    };
-
-    let weight = table.weight();
-    let stretch = table.width();
-
-    (style, Weight(weight.to_number()), stretch)
-}
-
-fn parse_post(raw_face: &ttf_parser::RawFace<'_>) -> (bool, bool) {
-    // We need just a single value from the `post` table, while ttf-parser will parse all.
-    // Therefore we have a custom parser.
-
-    const POST_TAG: ttf_parser::Tag = ttf_parser::Tag::from_bytes(*b"post");
-    let Some(data) = raw_face.table(POST_TAG) else {
-        return (false, false);
-    };
-
-    // All we care about, it that u32 at offset 12 is non-zero.
-    let monospaced = data.get(12..16) != Some(&[0, 0, 0, 0]);
-
-    // Italic angle as f16.16.
-    let italic = data.get(4..8) != Some(&[0, 0, 0, 0]);
-
-    (monospaced, italic)
-}
-
-trait NameExt {
-    fn is_mac_roman(&self) -> bool;
-    fn is_supported_encoding(&self) -> bool;
-}
-
-impl NameExt for ttf_parser::name::Name<'_> {
-    #[inline]
-    fn is_mac_roman(&self) -> bool {
-        use ttf_parser::PlatformId::Macintosh;
-        // https://docs.microsoft.com/en-us/typography/opentype/spec/name#macintosh-encoding-ids-script-manager-codes
-        const MACINTOSH_ROMAN_ENCODING_ID: u16 = 0;
-
-        self.platform_id == Macintosh && self.encoding_id == MACINTOSH_ROMAN_ENCODING_ID
-    }
-
-    #[inline]
-    fn is_supported_encoding(&self) -> bool {
-        self.is_unicode() || self.is_mac_roman()
-    }
-}
-
 // Based on https://github.com/servo/font-kit
 /// Returns the face CSS font matching picks from one family's `candidates`,
 /// or `None` when there are none.
 ///
 /// Implements step 4 of
 /// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>.
-/// Step 4d (`font-size`) does not apply. Of the faces left equal after the
-/// steps, the first in `candidates` wins; `candidates` come in load order.
+/// Step 4d (`font-size`) does not apply. The faces left equal after the
+/// steps are a tie, which [`tie_winner`] answers; `candidates` come in load
+/// order.
 #[inline(never)]
 fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option<&'a FaceInfo> {
     let mut matching_set = candidates.to_vec();
@@ -1602,7 +1457,25 @@ fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option
     let weight = matching_weight(&matching_set, query.weight)?;
     matching_set.retain(|face| face.weight == weight);
 
-    matching_set.first().copied()
+    tie_winner(&matching_set)
+}
+
+/// Returns the face that answers a tie among `tied`, which come in load
+/// order: the one whose subfamily is Regular or Roman when exactly one is,
+/// else the first.
+fn tie_winner<'a>(tied: &[&'a FaceInfo]) -> Option<&'a FaceInfo> {
+    /// The subfamily names of a family's plain face.
+    const PLAIN: [&str; 2] = ["Regular", "Roman"];
+
+    let mut plain = tied.iter().copied().filter(|face| {
+        PLAIN
+            .iter()
+            .any(|name| face.subfamily.eq_ignore_ascii_case(name))
+    });
+    match (plain.next(), plain.next()) {
+        (Some(only), None) => Some(only),
+        _ => tied.first().copied(),
+    }
 }
 
 /// Returns the stretch of the face nearest `query`: an exact match, else the
@@ -1671,54 +1544,6 @@ fn nearest<'a>(
     closest_on(lower_first).or_else(|| closest_on(!lower_first))
 }
 
-/// Returns the UTF-16 code unit for a Macintosh Roman byte.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "MAC_ROMAN has 256 entries, one per u8 value, so every byte indexes it"
-)]
-fn mac_roman_to_utf16(byte: u8) -> u16 {
-    MAC_ROMAN[usize::from(byte)]
-}
-
-/// Macintosh Roman to UTF-16 encoding table.
-///
-/// <https://en.wikipedia.org/wiki/Mac_OS_Roman>
-#[rustfmt::skip]
-const MAC_ROMAN: &[u16; 256] = &[
-    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
-    0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F,
-    0x0010, 0x2318, 0x21E7, 0x2325, 0x2303, 0x0015, 0x0016, 0x0017,
-    0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F,
-    0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027,
-    0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
-    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
-    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
-    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
-    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
-    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
-    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F,
-    0x0060, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
-    0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
-    0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
-    0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
-    0x00C4, 0x00C5, 0x00C7, 0x00C9, 0x00D1, 0x00D6, 0x00DC, 0x00E1,
-    0x00E0, 0x00E2, 0x00E4, 0x00E3, 0x00E5, 0x00E7, 0x00E9, 0x00E8,
-    0x00EA, 0x00EB, 0x00ED, 0x00EC, 0x00EE, 0x00EF, 0x00F1, 0x00F3,
-    0x00F2, 0x00F4, 0x00F6, 0x00F5, 0x00FA, 0x00F9, 0x00FB, 0x00FC,
-    0x2020, 0x00B0, 0x00A2, 0x00A3, 0x00A7, 0x2022, 0x00B6, 0x00DF,
-    0x00AE, 0x00A9, 0x2122, 0x00B4, 0x00A8, 0x2260, 0x00C6, 0x00D8,
-    0x221E, 0x00B1, 0x2264, 0x2265, 0x00A5, 0x00B5, 0x2202, 0x2211,
-    0x220F, 0x03C0, 0x222B, 0x00AA, 0x00BA, 0x03A9, 0x00E6, 0x00F8,
-    0x00BF, 0x00A1, 0x00AC, 0x221A, 0x0192, 0x2248, 0x2206, 0x00AB,
-    0x00BB, 0x2026, 0x00A0, 0x00C0, 0x00C3, 0x00D5, 0x0152, 0x0153,
-    0x2013, 0x2014, 0x201C, 0x201D, 0x2018, 0x2019, 0x00F7, 0x25CA,
-    0x00FF, 0x0178, 0x2044, 0x20AC, 0x2039, 0x203A, 0xFB01, 0xFB02,
-    0x2021, 0x00B7, 0x201A, 0x201E, 0x2030, 0x00C2, 0x00CA, 0x00C1,
-    0x00CB, 0x00C8, 0x00CD, 0x00CE, 0x00CF, 0x00CC, 0x00D3, 0x00D4,
-    0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
-    0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
-];
-
 #[cfg(feature = "fs")]
 pub mod env;
 mod generic_family;
@@ -1747,6 +1572,3 @@ pub use error::{ConfigError, Error};
 /// [`Error`] as the default error.
 #[cfg(feature = "cli")]
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
-#[cfg(test)]
-mod face_info_tests;

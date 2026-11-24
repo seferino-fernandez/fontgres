@@ -2,69 +2,11 @@
 //! implementation.
 
 use super::parser::Stream;
+use crate::Style;
 
 const WEIGHT_CLASS_OFFSET: usize = 4;
 const WIDTH_CLASS_OFFSET: usize = 6;
 const SELECTION_OFFSET: usize = 62;
-
-/// A face [weight](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#usweightclass).
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Hash)]
-pub(crate) enum Weight {
-    Thin,
-    ExtraLight,
-    Light,
-    Normal,
-    Medium,
-    SemiBold,
-    Bold,
-    ExtraBold,
-    Black,
-    Other(u16),
-}
-
-impl Weight {
-    /// Returns a numeric representation of a weight.
-    #[inline]
-    pub(crate) fn to_number(self) -> u16 {
-        match self {
-            Weight::Thin => 100,
-            Weight::ExtraLight => 200,
-            Weight::Light => 300,
-            Weight::Normal => 400,
-            Weight::Medium => 500,
-            Weight::SemiBold => 600,
-            Weight::Bold => 700,
-            Weight::ExtraBold => 800,
-            Weight::Black => 900,
-            Weight::Other(n) => n,
-        }
-    }
-}
-
-impl From<u16> for Weight {
-    #[inline]
-    fn from(value: u16) -> Self {
-        match value {
-            100 => Weight::Thin,
-            200 => Weight::ExtraLight,
-            300 => Weight::Light,
-            400 => Weight::Normal,
-            500 => Weight::Medium,
-            600 => Weight::SemiBold,
-            700 => Weight::Bold,
-            800 => Weight::ExtraBold,
-            900 => Weight::Black,
-            _ => Weight::Other(value),
-        }
-    }
-}
-
-impl Default for Weight {
-    #[inline]
-    fn default() -> Self {
-        Weight::Normal
-    }
-}
 
 css_keywords! {
     /// The width of a face relative to its family's normal width, as the CSS
@@ -132,24 +74,6 @@ impl Default for Width {
     }
 }
 
-/// A face style.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub(crate) enum Style {
-    /// A face that is neither italic not obliqued.
-    Normal,
-    /// A form that is generally cursive in nature.
-    Italic,
-    /// A typically-sloped version of the regular face.
-    Oblique,
-}
-
-impl Default for Style {
-    #[inline]
-    fn default() -> Style {
-        Style::Normal
-    }
-}
-
 // https://docs.microsoft.com/en-us/typography/opentype/spec/os2#fsselection
 #[derive(Clone, Copy)]
 struct SelectionFlags(u16);
@@ -191,10 +115,11 @@ impl<'a> Table<'a> {
         Some(Table { version, data })
     }
 
-    /// Returns weight class.
+    /// Returns [`usWeightClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#usweightclass)
+    /// as the table holds it.
     #[inline]
-    pub(crate) fn weight(&self) -> Weight {
-        Weight::from(Stream::read_at::<u16>(self.data, WEIGHT_CLASS_OFFSET).unwrap_or(0))
+    pub(crate) fn weight_class(&self) -> u16 {
+        Stream::read_at::<u16>(self.data, WEIGHT_CLASS_OFFSET).unwrap_or(0)
     }
 
     /// Returns face width.
