@@ -96,7 +96,7 @@ pub struct FontQuery {
     #[arg(required = true, value_name = "FAMILY")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub families: Vec<String>,
-    /// Wanted weight: 100 (thin) to 900 (black); 400 is normal, 700 bold.
+    /// Wanted weight, from 1 to 1000; 400 is normal, 700 bold.
     #[arg(
         long,
         default_value_t = normal_weight(),

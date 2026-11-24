@@ -1,6 +1,6 @@
 //! Loading a font and reading its ID back.
 
-use fontgres_core as fontdb;
+use fontgres_core::{Database, Source};
 
 const DEMO_TTF: &[u8] = include_bytes!("./fonts/Tuffy.ttf");
 use std::sync::Arc;
@@ -8,8 +8,8 @@ use std::sync::Arc;
 #[test]
 fn add_fonts_and_get_ids_back() {
     tracing_subscriber::fmt::init();
-    let mut font_db = fontdb::Database::new();
-    let report = font_db.load_font_source(&fontdb::Source::Binary(Arc::new(DEMO_TTF)));
+    let mut font_db = Database::new();
+    let report = font_db.load_font_source(&Source::Binary(Arc::new(DEMO_TTF)));
     let ids: Vec<_> = report.added().collect();
 
     assert_eq!(ids.len(), 1);

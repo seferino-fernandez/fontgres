@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Query installed fonts from the terminal"
 readme = "README.md"
-keywords = ["cli", "font", "fontdb", "terminal"]
+keywords = ["cli", "font", "css", "terminal"]
 categories = ["command-line-utilities", "text-processing"]
 
 # cargo-binstall fetches the archives release-binaries.yml attaches to each

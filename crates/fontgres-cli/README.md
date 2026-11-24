@@ -1,22 +1,18 @@
 # fontgres-cli
 
-Query the fonts on this machine from the terminal, built on
-[fontgres-core](../fontgres-core/), a fork of [fontdb](https://github.com/RazrFalcon/fontdb).
+List the fonts installed on this machine and find the face that best matches a
+CSS-style query, from the terminal. Built on [fontgres-core](../fontgres-core/).
 
 ## Install
 
-`brew install seferino-fernandez/tools/fontgres` (Homebrew, with shell completions
-and man pages), `cargo binstall fontgres-cli` (prebuilt binary) or
-`cargo install fontgres-cli` (from source). Archives for Linux, macOS and Windows
-are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
-
-## Build
-
 ```shell
-cargo build --release -p fontgres-cli
+brew install seferino-fernandez/tools/fontgres   # macOS and Linux
+cargo binstall fontgres-cli                      # a prebuilt binary
+cargo install fontgres-cli                       # from source, with Rust 1.100 or newer
 ```
 
-The binary is written to `target/release/fontgres`. Add it to your `PATH` or invoke it directly.
+[Installing fontgres](../../docs/installation.md) has the release archives,
+shell completions and man pages.
 
 ## Commands
 
@@ -72,20 +68,8 @@ shows as its escape (`\n`) in the table; JSON and CSV carry the name as it is.
 
 ## Configuration
 
-Config file default location: `~/.config/fontgres/config.toml`
-(override with `--config <PATH>` or `FONTGRES_CONFIG`).
-
-Resolution precedence (highest first): CLI flag, then `FONTGRES_*` env, then
-`config.toml`, then built-in defaults. A list (font directories or files) is
-taken whole from the highest layer that sets it.
-
-| Flag / Env                                       | Description                                              |
-| ------------------------------------------------ | -------------------------------------------------------- |
-| `--no-system-fonts` / `FONTGRES_FONTS_SYSTEM`    | Whether to load the system's fonts (default: `true`).    |
-| `--font-dir` / `FONTGRES_FONTS_DIRS`             | Extra font directories (env: a `:`-separated path list). |
-| `--font-file` / `FONTGRES_FONTS_FILES`           | Extra font files (env: a `:`-separated path list).       |
-| `FONTGRES_FONTS_GENERIC_SERIF` (and `_SANS_SERIF`, `_CURSIVE`, `_FANTASY`, `_MONOSPACE`) | Family a CSS generic name resolves to. |
-| `--config` / `FONTGRES_CONFIG`                   | Path to `config.toml`.                                   |
-| `FONTGRES_LOG_LEVEL`                             | Log level: `trace`, `debug`, `info`, `warn`, `error`, `off`. |
-
-See [config.toml.example](../../config.toml.example) for all fields and defaults.
+Each setting comes from a flag, then a `FONTGRES_*` environment variable, then
+`~/.config/fontgres/config.toml`, then a built-in default.
+[Configuration](../../docs/configuration.md) lists every setting, the generic
+families and the log levels, and
+[config.toml.example](../../config.toml.example) is a file to start from.

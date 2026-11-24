@@ -4,10 +4,8 @@
 //! Load fonts from raw data, files, directories or the system's font
 //! directories into a [`Database`], then list its faces or ask it for the
 //! face that best matches a [`Query`], using the CSS font matching algorithm
-//! for stretch, style and weight. The crate is a fork of
-//! [fontdb](https://github.com/RazrFalcon/fontdb) 0.24.0. The database at the
-//! crate root began as fontdb's and has since diverged: it only gains faces,
-//! keeps them in load order, and a query returns the face itself.
+//! for stretch, style and weight. A database only gains faces, keeps them in
+//! load order, and a query returns the face itself.
 //!
 //! The database only stores and matches faces. It reads a face's names, style,
 //! weight, stretch and monospace flag, and leaves other font properties to a
