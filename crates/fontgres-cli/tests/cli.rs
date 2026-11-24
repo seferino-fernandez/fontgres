@@ -165,28 +165,62 @@ fn table_and_csv_output_name_the_face() {
     }
 }
 
+/// What `fontgres faces` leaves behind when it lists the test font in each
+/// output format into the stdout that `stdout` makes for the run.
+#[expect(clippy::unwrap_used, reason = "unwrap is fine in test helpers")]
+fn faces_into<T: Into<std::process::Stdio>>(
+    stdout: impl Fn() -> T,
+) -> Vec<(&'static str, std::process::Output)> {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    ["table", "json", "csv"]
+        .into_iter()
+        .map(|format| {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_fontgres"))
+                .env_clear()
+                .env("FONTGRES_CONFIG", &config)
+                .arg("--no-system-fonts")
+                .arg("--font-dir")
+                .arg(fonts_dir())
+                .args(["--output", format, "faces"])
+                .stdout(stdout())
+                .output()
+                .unwrap();
+            (format, output)
+        })
+        .collect()
+}
+
 /// A reader that closes stdout early, as `head` does, has all the output it
 /// wants: the run succeeds and reports nothing.
 #[test]
 fn a_closed_stdout_is_not_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, "").unwrap();
-    for format in ["table", "json", "csv"] {
+    let closed_pipe = || {
         let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fontgres"))
-            .env_clear()
-            .env("FONTGRES_CONFIG", &config)
-            .arg("--no-system-fonts")
-            .arg("--font-dir")
-            .arg(fonts_dir())
-            .args(["--output", format, "faces"])
-            .stdout(writer)
-            .output()
-            .unwrap();
+        writer
+    };
+    for (format, output) in faces_into(closed_pipe) {
         assert!(output.status.success(), "{format}: {output:?}");
         assert_eq!(String::from_utf8_lossy(&output.stderr), "", "{format}");
+    }
+}
+
+/// A stdout that takes no bytes for any other reason, here a socket with no
+/// peer to send to, fails the run: the output did not arrive.
+#[cfg(unix)]
+#[test]
+fn a_stdout_that_rejects_writes_fails_the_run() {
+    let socket_without_a_peer =
+        || std::os::fd::OwnedFd::from(std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
+    for (format, output) in faces_into(socket_without_a_peer) {
+        assert!(!output.status.success(), "{format}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.starts_with("fontgres: writing to stdout: "),
+            "{format}: {stderr}"
+        );
     }
 }
 

@@ -42,15 +42,15 @@ impl std::error::Error for StdoutClosed {}
 ///
 /// # Errors
 ///
-/// Fails with [`StdoutClosed`] when the reader closed stdout, without which a
-/// `println!` would panic. Other write errors are ignored (best-effort
-/// terminal output).
+/// Fails with [`StdoutClosed`] when the reader closed stdout, and with the
+/// error of any other write that stdout did not take, such as one to a full
+/// disk.
 pub(crate) fn print<T: Serialize>(
     format: OutputFormat,
     data: &T,
     headers: &[&str],
     rows: impl FnOnce() -> Vec<Vec<String>>,
-) -> Result<(), StdoutClosed> {
+) -> anyhow::Result<()> {
     print_to(io::stdout().lock(), format, data, headers, rows)
 }
 
@@ -61,7 +61,7 @@ fn print_to<T: Serialize>(
     data: &T,
     headers: &[&str],
     rows: impl FnOnce() -> Vec<Vec<String>>,
-) -> Result<(), StdoutClosed> {
+) -> anyhow::Result<()> {
     let mut out = BufWriter::new(stream);
     let written = match format {
         OutputFormat::Json => write_json(&mut out, data),
@@ -70,8 +70,9 @@ fn print_to<T: Serialize>(
     }
     .and_then(|()| out.flush());
     match written {
-        Err(error) if error.kind() == ErrorKind::BrokenPipe => Err(StdoutClosed),
-        Ok(()) | Err(_) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => Err(StdoutClosed.into()),
+        Err(error) => Err(anyhow::Error::new(error).context("writing to stdout")),
     }
 }
 
@@ -221,16 +222,36 @@ mod tests {
         }
     }
 
-    /// Prints a hundred-row CSV listing, about 2 KB, to `stream`.
-    fn print_a_listing(stream: &mut Stream) -> Result<(), StdoutClosed> {
-        let listed = vec![["Tuffy Condensed", "500"]; 100];
-        print_to(
-            stream,
-            OutputFormat::Csv,
-            &(),
-            &["Family", "Weight"],
-            || rows(&listed),
-        )
+    /// Prints a listing of `length` rows to `stream` in `format`. A hundred
+    /// rows fit the buffer and a thousand overflow it in every format, so a
+    /// failing stream fails the last flush of the first and a write in the
+    /// middle of the second.
+    fn print_a_listing(
+        stream: &mut Stream,
+        format: OutputFormat,
+        length: usize,
+    ) -> anyhow::Result<()> {
+        let listed = vec![["Tuffy Condensed", "500"]; length];
+        print_to(stream, format, &listed, &["Family", "Weight"], || {
+            rows(&listed)
+        })
+    }
+
+    /// The error of printing a short and a long listing in each format to a
+    /// stream whose writes fail with `kind`.
+    fn errors_of_printing_to_a_stream_failing_with(kind: ErrorKind) -> Vec<anyhow::Error> {
+        let formats = [OutputFormat::Table, OutputFormat::Json, OutputFormat::Csv];
+        let mut errors = Vec::new();
+        for format in formats {
+            for length in [100, 1000] {
+                let mut stream = Stream {
+                    writes: 0,
+                    fails_with: Some(kind),
+                };
+                errors.push(print_a_listing(&mut stream, format, length).unwrap_err());
+            }
+        }
+        errors
     }
 
     #[test]
@@ -239,16 +260,28 @@ mod tests {
             writes: 0,
             fails_with: None,
         };
-        print_a_listing(&mut stream).unwrap();
+        print_a_listing(&mut stream, OutputFormat::Csv, 100).unwrap();
         assert_eq!(stream.writes, 1);
     }
 
     #[test]
     fn a_closed_stream_stops_the_output() {
-        let mut stream = Stream {
-            writes: 0,
-            fails_with: Some(ErrorKind::BrokenPipe),
-        };
-        assert!(print_a_listing(&mut stream).is_err());
+        for error in errors_of_printing_to_a_stream_failing_with(ErrorKind::BrokenPipe) {
+            assert!(error.is::<StdoutClosed>(), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn a_stream_that_rejects_writes_is_an_error_naming_stdout() {
+        for error in errors_of_printing_to_a_stream_failing_with(ErrorKind::StorageFull) {
+            assert!(!error.is::<StdoutClosed>());
+            assert_eq!(
+                format!("{error:#}"),
+                format!(
+                    "writing to stdout: {}",
+                    io::Error::from(ErrorKind::StorageFull)
+                )
+            );
+        }
     }
 }
