@@ -61,11 +61,21 @@ fn font_at(start: usize, magic: [u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<
     data
 }
 
-/// Returns a format 0 `name` table with one record per (platform, encoding,
-/// language, name ID, text). Macintosh text is stored one byte per character,
-/// the byte being the character's code point, so `\u{8e}` stores the byte
-/// Macintosh Roman reads as `é`; the rest is stored as UTF-16BE.
+/// Returns a version 0 `name` table with one record per (platform,
+/// encoding, language, name ID, text). Macintosh text is stored one byte per
+/// character, the byte being the character's code point, so `\u{8e}` stores
+/// the byte Macintosh Roman reads as `é`; the rest is stored as UTF-16BE.
 fn name_table(names: &[NameRecord<'_>]) -> Vec<u8> {
+    versioned_name_table(0, names, &[])
+}
+
+/// Returns a `name` table that declares `version`, laid out as version 1
+/// is: the name records, then the count of `language_tags` and a record for
+/// each, then the storage. Without language tags that is the layout of
+/// version 0.
+fn versioned_name_table(version: u16, names: &[NameRecord<'_>], language_tags: &[&str]) -> Vec<u8> {
+    let utf16 =
+        |text: &str| -> Vec<u8> { text.encode_utf16().flat_map(u16::to_be_bytes).collect() };
     let mut records = Vec::new();
     let mut storage = Vec::new();
     for &(platform, encoding, language, name_id, text) in names {
@@ -74,7 +84,7 @@ fn name_table(names: &[NameRecord<'_>]) -> Vec<u8> {
                 .map(|c| u8::try_from(u32::from(c)).unwrap())
                 .collect()
         } else {
-            text.encode_utf16().flat_map(u16::to_be_bytes).collect()
+            utf16(text)
         };
         for field in [platform, encoding, language, name_id] {
             records.extend(field.to_be_bytes());
@@ -83,7 +93,16 @@ fn name_table(names: &[NameRecord<'_>]) -> Vec<u8> {
         records.extend(be16(storage.len()));
         storage.extend(bytes);
     }
-    let mut table = vec![0, 0];
+    if !language_tags.is_empty() {
+        records.extend(be16(language_tags.len()));
+    }
+    for tag in language_tags {
+        let bytes = utf16(tag);
+        records.extend(be16(bytes.len()));
+        records.extend(be16(storage.len()));
+        storage.extend(bytes);
+    }
+    let mut table = version.to_be_bytes().to_vec();
     table.extend(be16(names.len()));
     table.extend(be16(records.len().checked_add(6).unwrap()));
     table.extend(records);
@@ -237,6 +256,68 @@ fn the_postscript_name_is_the_first_one_that_can_be_decoded() {
     ])
     .unwrap();
     assert_eq!(face.post_script_name, "Font-Mac");
+}
+
+/// A version 1 table puts its language tags between the name records and
+/// the storage.
+#[test]
+fn a_version_1_name_table_is_read() {
+    let names = versioned_name_table(
+        1,
+        &[
+            english(FAMILY, "Font"),
+            english(POST_SCRIPT_NAME, "Font-One"),
+        ],
+        &["en-Latn", "fr"],
+    );
+    let face = parse(&font(TRUETYPE, &[(b"name", names)])).unwrap();
+    assert_eq!(
+        (face.families[0].0.as_str(), face.post_script_name.as_str()),
+        ("Font", "Font-One")
+    );
+}
+
+#[test]
+fn a_name_table_of_a_version_the_format_does_not_define_gives_no_name() {
+    let names = versioned_name_table(2, &[english(FAMILY, "Font")], &[]);
+    let error = parse(&font(TRUETYPE, &[(b"name", names)])).unwrap_err();
+    assert!(
+        matches!(error, FontLoadFailureReason::NoFamilyName),
+        "{error}"
+    );
+}
+
+/// A record for a platform the format does not define is left out, and the
+/// records after it are still read.
+#[test]
+fn a_name_record_of_an_unknown_platform_is_skipped() {
+    let face = parse_names(&[
+        (9, 0, 0, FAMILY, "Lost"),
+        english(FAMILY, "Font"),
+        (9, 0, 0, POST_SCRIPT_NAME, "Lost"),
+        english(POST_SCRIPT_NAME, "Font-Regular"),
+    ])
+    .unwrap();
+    assert_eq!(
+        (face.families.len(), face.families[0].0.as_str()),
+        (1, "Font")
+    );
+    assert_eq!(face.post_script_name, "Font-Regular");
+}
+
+/// A record whose string runs past the end of the table is left out, and
+/// the records after it are still read.
+#[test]
+fn a_name_record_with_a_string_outside_the_table_is_skipped() {
+    let mut names = name_table(&[english(FAMILY, "Lost"), english(FAMILY, "Font")]);
+    // The first record starts after the 6-byte header; its string length is
+    // the fifth of its six 16-bit fields.
+    names[14..16].copy_from_slice(&u16::MAX.to_be_bytes());
+    let face = parse(&font(TRUETYPE, &[(b"name", names)])).unwrap();
+    assert_eq!(
+        (face.families.len(), face.families[0].0.as_str()),
+        (1, "Font")
+    );
 }
 
 #[test]
@@ -419,6 +500,29 @@ fn an_unusable_os2_table_leaves_the_defaults() {
         assert_eq!(
             (face.weight, face.stretch, face.style),
             (Weight::NORMAL, Stretch::Normal, Style::Normal)
+        );
+    }
+}
+
+/// A `post` table cut short declares only the fields it still holds
+/// whole: the italic angle ends at byte 8 and the fixed-pitch flag at 16.
+#[test]
+fn a_post_table_too_short_for_a_field_does_not_declare_it() {
+    let cases = [
+        (0, false, Style::Normal),
+        (7, false, Style::Normal),
+        (8, false, Style::Italic),
+        (15, false, Style::Italic),
+        (16, true, Style::Italic),
+    ];
+    for (len, monospaced, style) in cases {
+        let mut post = post_table(0xFFF4_0000, 1);
+        post.truncate(len);
+        let face = named_face_with(*b"post", post);
+        assert_eq!(
+            (face.monospaced, face.style),
+            (monospaced, style),
+            "a table of {len} bytes"
         );
     }
 }

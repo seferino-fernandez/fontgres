@@ -941,7 +941,7 @@ pub struct FaceInfo {
     pub stretch: Stretch,
 
     /// Whether the face's `post` table declares it monospaced; `false` when it
-    /// has none.
+    /// has none, or one too short to say.
     pub monospaced: bool,
 }
 

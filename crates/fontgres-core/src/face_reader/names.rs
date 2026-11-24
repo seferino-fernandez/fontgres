@@ -36,7 +36,7 @@ pub(super) fn read(raw_face: &RawFace<'_>) -> Option<(Vec<(String, Language)>, S
     // family as fontconfig makes it.
     let post_script_name = name_table
         .names
-        .into_iter()
+        .iter()
         .find(|name| name.id == name_id::POST_SCRIPT_NAME && is_supported_encoding(name))
         .and_then(|name| name_to_unicode(&name))
         .unwrap_or_else(|| postscript_name::from_family(first_family));
@@ -46,7 +46,7 @@ pub(super) fn read(raw_face: &RawFace<'_>) -> Option<(Vec<(String, Language)>, S
 
 fn collect_families(name_id: u16, names: &Names<'_>) -> Vec<(String, Language)> {
     let mut families = Vec::new();
-    for name in names.into_iter() {
+    for name in names.iter() {
         if name.id == name_id
             && name.is_unicode()
             && let Some(family) = name_to_unicode(&name)
@@ -60,7 +60,7 @@ fn collect_families(name_id: u16, names: &Names<'_>) -> Vec<(String, Language)> 
         .iter()
         .any(|f| f.1 == Language::English_UnitedStates)
     {
-        for name in names.into_iter() {
+        for name in names.iter() {
             if name.id == name_id
                 && is_mac_roman(&name)
                 && let Some(family) = name_to_unicode(&name)

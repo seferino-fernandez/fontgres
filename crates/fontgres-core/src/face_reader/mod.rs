@@ -91,20 +91,25 @@ fn parse_os2(raw_face: &RawFace<'_>) -> (Style, Weight, Stretch) {
     (style, Weight(weight.to_number()), stretch)
 }
 
+/// Returns whether the `post` table declares the face monospaced, and whether
+/// it gives an italic angle.
+///
+/// A face without the table, or with one too short to hold a field, does not
+/// declare that field.
 fn parse_post(raw_face: &RawFace<'_>) -> (bool, bool) {
-    // We need just a single value from the `post` table, while ttf-parser will parse all.
-    // Therefore we have a custom parser.
-
     const POST_TAG: Tag = Tag::from_bytes(*b"post");
+    /// `italicAngle`, a 16.16 fixed-point number.
+    const ITALIC_ANGLE: core::ops::Range<usize> = 4..8;
+    /// `isFixedPitch`, a 32-bit number.
+    const IS_FIXED_PITCH: core::ops::Range<usize> = 12..16;
+
     let Some(data) = raw_face.table(POST_TAG) else {
         return (false, false);
     };
+    let is_set = |field: core::ops::Range<usize>| {
+        data.get(field)
+            .is_some_and(|bytes| bytes.iter().any(|&byte| byte != 0))
+    };
 
-    // All we care about, it that u32 at offset 12 is non-zero.
-    let monospaced = data.get(12..16) != Some(&[0, 0, 0, 0]);
-
-    // Italic angle as f16.16.
-    let italic = data.get(4..8) != Some(&[0, 0, 0, 0]);
-
-    (monospaced, italic)
+    (is_set(IS_FIXED_PITCH), is_set(ITALIC_ANGLE))
 }

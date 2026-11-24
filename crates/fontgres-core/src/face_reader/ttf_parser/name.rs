@@ -129,8 +129,17 @@ pub(crate) struct Names<'a> {
 }
 
 impl<'a> Names<'a> {
-    /// Returns a name at index.
-    pub(crate) fn get(&self, index: u16) -> Option<Name<'a>> {
+    /// Returns the names whose records can be read, in table order.
+    ///
+    /// A record that names a platform the format does not define, or a string
+    /// outside the table's storage, is left out; the records after it are
+    /// still read.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Name<'a>> + '_ {
+        (0..self.records.len()).filter_map(|index| self.get(index))
+    }
+
+    /// Returns the name at `index`, or `None` when its record cannot be read.
+    fn get(&self, index: u16) -> Option<Name<'a>> {
         let record = self.records.get(index)?;
         let name_start = record.offset.to_usize();
         let name_end = name_start.checked_add(usize::from(record.length))?;
@@ -143,51 +152,11 @@ impl<'a> Names<'a> {
             data: name,
         })
     }
-
-    /// Returns a number of name records.
-    pub(crate) fn len(&self) -> u16 {
-        self.records.len()
-    }
 }
 
 impl core::fmt::Debug for Names<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Names {{ ... }}")
-    }
-}
-
-impl<'a> IntoIterator for Names<'a> {
-    type Item = Name<'a>;
-    type IntoIter = NamesIter<'a>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        NamesIter {
-            names: self,
-            index: 0,
-        }
-    }
-}
-
-/// An iterator over face names.
-#[derive(Clone)]
-pub(crate) struct NamesIter<'a> {
-    names: Names<'a>,
-    index: u16,
-}
-
-impl<'a> Iterator for NamesIter<'a> {
-    type Item = Name<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let name = self.names.get(self.index)?;
-        self.index = self.index.checked_add(1)?;
-        Some(name)
-    }
-
-    #[inline]
-    fn count(self) -> usize {
-        usize::from(self.names.len().saturating_sub(self.index))
     }
 }
 
@@ -202,25 +171,22 @@ pub(crate) struct Table<'a> {
 impl<'a> Table<'a> {
     /// Parses a table from raw data.
     pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
-        // https://docs.microsoft.com/en-us/typography/opentype/spec/name#naming-table-format-1
-        const LANG_TAG_RECORD_SIZE: u16 = 4;
+        // https://docs.microsoft.com/en-us/typography/opentype/spec/name#naming-table-version-1
+        /// The last version of the table the format defines.
+        const LAST_VERSION: u16 = 1;
 
         let mut s = Stream::new(data);
         let version = s.read::<u16>()?;
         let count = s.read::<u16>()?;
         let storage_offset = s.read::<Offset16>()?.to_usize();
 
-        if version == 0 {
-            // Do nothing.
-        } else if version == 1 {
-            let lang_tag_count = s.read::<u16>()?;
-            let lang_tag_len = lang_tag_count.checked_mul(LANG_TAG_RECORD_SIZE)?;
-            s.advance(usize::from(lang_tag_len)); // langTagRecords
-        } else {
-            // Unsupported version.
+        if version > LAST_VERSION {
             return None;
         }
 
+        // Versions 0 and 1 are laid out alike this far. Version 1 puts its
+        // language tags after the name records, and the storage offset
+        // already counts them.
         let records = s.read_array16::<NameRecord>(count)?;
 
         if let Some(gap) = storage_offset.checked_sub(s.offset()) {
