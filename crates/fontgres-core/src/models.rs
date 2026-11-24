@@ -2,11 +2,11 @@
 //! `fontgres` binaries build on them.
 //!
 //! [`FontsConfig::build_database`](crate::FontsConfig::build_database) loads
-//! the fonts a configuration names, [`FontQuery`] finds the best face for a
-//! list of families, and [`faces`] and [`family_names`] list what the
-//! database holds. A face comes back as a [`Face`], a copy of a
-//! [`FaceInfo`] that serializes with CSS keywords, so the
-//! serialized form does not change when `FaceInfo` does.
+//! the fonts a configuration names, [`FontQuery`] is the query both binaries
+//! read and finds the best face for a list of families, and [`faces`] and
+//! [`family_names`] list what the database holds. A face comes back as a
+//! [`Face`], a copy of a [`FaceInfo`] that serializes with CSS keywords, so
+//! the serialized form does not change when `FaceInfo` does.
 
 use std::path::{Path, PathBuf};
 
@@ -29,12 +29,12 @@ pub struct Face {
     /// The face's `PostScript` name.
     pub post_script_name: String,
     /// Normal, italic or oblique.
-    pub style: FontStyle,
+    pub style: Style,
     /// CSS weight as the font declares it, normally 1 to 1000; 400 is normal
     /// and 700 bold.
     pub weight: u16,
     /// CSS stretch, from `ultra-condensed` to `ultra-expanded`.
-    pub stretch: FontStretch,
+    pub stretch: Stretch,
     /// Whether every glyph has the same advance width.
     pub monospaced: bool,
     /// The file the face was loaded from; `None` for in-memory data.
@@ -50,9 +50,9 @@ impl From<&FaceInfo> for Face {
             family: families.first().cloned().unwrap_or_default(),
             families,
             post_script_name: info.post_script_name.clone(),
-            style: info.style.into(),
+            style: info.style,
             weight: info.weight.0,
-            stretch: info.stretch.into(),
+            stretch: info.stretch,
             monospaced: info.monospaced,
             path: source_path(&info.source).map(Path::to_path_buf),
             index: info.index,
@@ -68,111 +68,67 @@ fn source_path(source: &Source) -> Option<&Path> {
     }
 }
 
-/// A face's style, the CSS `font-style`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum FontStyle {
-    /// Neither italic nor oblique.
-    #[default]
-    Normal,
-    /// A form that is generally cursive in nature.
-    Italic,
-    /// A typically sloped version of the regular face.
-    Oblique,
-}
+/// The smallest weight a query may ask for.
+const MIN_WEIGHT: u16 = 1;
+/// The largest weight a query may ask for.
+const MAX_WEIGHT: u16 = 1000;
 
-impl From<Style> for FontStyle {
-    fn from(style: Style) -> Self {
-        match style {
-            Style::Normal => Self::Normal,
-            Style::Italic => Self::Italic,
-            Style::Oblique => Self::Oblique,
-        }
-    }
-}
-
-impl From<FontStyle> for Style {
-    fn from(style: FontStyle) -> Self {
-        match style {
-            FontStyle::Normal => Self::Normal,
-            FontStyle::Italic => Self::Italic,
-            FontStyle::Oblique => Self::Oblique,
-        }
-    }
-}
-
-/// A face's width, the CSS `font-stretch`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum FontStretch {
-    /// 50% of normal width.
-    UltraCondensed,
-    /// 62.5% of normal width.
-    ExtraCondensed,
-    /// 75% of normal width.
-    Condensed,
-    /// 87.5% of normal width.
-    SemiCondensed,
-    /// Normal width.
-    #[default]
-    Normal,
-    /// 112.5% of normal width.
-    SemiExpanded,
-    /// 125% of normal width.
-    Expanded,
-    /// 150% of normal width.
-    ExtraExpanded,
-    /// 200% of normal width.
-    UltraExpanded,
-}
-
-impl From<Stretch> for FontStretch {
-    fn from(stretch: Stretch) -> Self {
-        match stretch {
-            Stretch::UltraCondensed => Self::UltraCondensed,
-            Stretch::ExtraCondensed => Self::ExtraCondensed,
-            Stretch::Condensed => Self::Condensed,
-            Stretch::SemiCondensed => Self::SemiCondensed,
-            Stretch::Normal => Self::Normal,
-            Stretch::SemiExpanded => Self::SemiExpanded,
-            Stretch::Expanded => Self::Expanded,
-            Stretch::ExtraExpanded => Self::ExtraExpanded,
-            Stretch::UltraExpanded => Self::UltraExpanded,
-        }
-    }
-}
-
-impl From<FontStretch> for Stretch {
-    fn from(stretch: FontStretch) -> Self {
-        match stretch {
-            FontStretch::UltraCondensed => Self::UltraCondensed,
-            FontStretch::ExtraCondensed => Self::ExtraCondensed,
-            FontStretch::Condensed => Self::Condensed,
-            FontStretch::SemiCondensed => Self::SemiCondensed,
-            FontStretch::Normal => Self::Normal,
-            FontStretch::SemiExpanded => Self::SemiExpanded,
-            FontStretch::Expanded => Self::Expanded,
-            FontStretch::ExtraExpanded => Self::ExtraExpanded,
-            FontStretch::UltraExpanded => Self::UltraExpanded,
-        }
-    }
+/// The CSS `normal` weight, which a query asks for unless it names another.
+fn normal_weight() -> u16 {
+    Weight::NORMAL.0
 }
 
 /// A CSS-like font query: the best face for the first family that has one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Both binaries read their query as this type: `fontgres query` from the
+/// command line, and the MCP server from a tool call's arguments, where an
+/// argument it does not declare is an error. [`run`](Self::run) checks what
+/// those readers check, so a query built in code is held to the same rules.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, clap::Args)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct FontQuery {
-    /// Families in priority order. The CSS generic names `serif`,
-    /// `sans-serif`, `cursive`, `fantasy` and `monospace` (any case) resolve
-    /// through the database's generic families; any other name is a family name.
+    /// Families in priority order. Names match ignoring ASCII case;
+    /// `serif`, `sans-serif`, `cursive`, `fantasy` and `monospace` resolve
+    /// through the configured generic families.
+    #[arg(required = true, value_name = "FAMILY")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub families: Vec<String>,
-    /// Wanted CSS weight (400 is normal, 700 bold).
+    /// Wanted weight: 100 (thin) to 900 (black); 400 is normal, 700 bold.
+    #[arg(
+        long,
+        default_value_t = normal_weight(),
+        value_parser = clap::value_parser!(u16).range(i64::from(MIN_WEIGHT)..=i64::from(MAX_WEIGHT))
+    )]
+    #[serde(default = "normal_weight")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = MIN_WEIGHT, max = MAX_WEIGHT))
+    )]
     pub weight: u16,
     /// Wanted style.
-    pub style: FontStyle,
+    #[arg(long, value_enum, default_value_t = Style::Normal)]
+    #[serde(default)]
+    pub style: Style,
     /// Wanted stretch.
-    pub stretch: FontStretch,
+    #[arg(long, value_enum, default_value_t = Stretch::Normal)]
+    #[serde(default)]
+    pub stretch: Stretch,
+}
+
+/// Why a [`FontQuery`] gave no face.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum QueryError {
+    /// The query lists no family.
+    #[error("families must name at least one family")]
+    NoFamilies,
+    /// The wanted weight, held here, is outside the CSS range of 1 to 1000.
+    #[error("weight must be between {min} and {max}, got {0}", min = MIN_WEIGHT, max = MAX_WEIGHT)]
+    WeightOutOfRange(u16),
+    /// The database has no face of any family the query lists; they are
+    /// held here in the query's order.
+    #[error("no face matches {}", .0.join(", "))]
+    NoMatch(Vec<String>),
 }
 
 impl FontQuery {
@@ -180,23 +136,29 @@ impl FontQuery {
     pub fn new(families: Vec<String>) -> Self {
         Self {
             families,
-            weight: Weight::NORMAL.0,
-            style: FontStyle::Normal,
-            stretch: FontStretch::Normal,
+            weight: normal_weight(),
+            style: Style::Normal,
+            stretch: Stretch::Normal,
         }
     }
 
-    /// Returns the face in `database` that best matches the query, or `None`
-    /// when no listed family is in the database.
+    /// Returns the face in `database` that best matches the query.
     ///
     /// Matching follows [`Database::query`], so a family name other than a
     /// generic one matches the font's family name ignoring ASCII case.
+    ///
+    /// # Errors
+    ///
+    /// - [`QueryError::NoFamilies`] when the query lists no family.
+    /// - [`QueryError::WeightOutOfRange`] when the weight is not from 1 to
+    ///   1000.
+    /// - [`QueryError::NoMatch`] when no listed family is in the database.
     ///
     /// # Examples
     ///
     /// ```
     /// use fontgres_core::Database;
-    /// use fontgres_core::models::FontQuery;
+    /// use fontgres_core::models::{FontQuery, QueryError};
     ///
     /// let mut database = Database::new();
     /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/Tuffy.ttf");
@@ -205,18 +167,29 @@ impl FontQuery {
     /// query.weight = 700;
     /// let face = query.run(&database).expect("Tuffy is loaded");
     /// assert_eq!(face.family, "Tuffy");
-    /// assert!(FontQuery::new(vec!["Missing".into()]).run(&database).is_none());
+    ///
+    /// let missing = FontQuery::new(vec!["Missing".into()]).run(&database);
+    /// assert_eq!(missing, Err(QueryError::NoMatch(vec!["Missing".into()])));
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn run(&self, database: &Database) -> Option<Face> {
+    pub fn run(&self, database: &Database) -> Result<Face, QueryError> {
+        if self.families.is_empty() {
+            return Err(QueryError::NoFamilies);
+        }
+        if !(MIN_WEIGHT..=MAX_WEIGHT).contains(&self.weight) {
+            return Err(QueryError::WeightOutOfRange(self.weight));
+        }
         let families: Vec<Family<'_>> = self.families.iter().map(|name| family(name)).collect();
         let query = Query {
             families: &families,
             weight: Weight(self.weight),
-            stretch: self.stretch.into(),
-            style: self.style.into(),
+            stretch: self.stretch,
+            style: self.style,
         };
-        database.query(&query).map(Face::from)
+        database
+            .query(&query)
+            .map(Face::from)
+            .ok_or_else(|| QueryError::NoMatch(self.families.clone()))
     }
 }
 
@@ -329,6 +302,7 @@ impl FontsConfig {
 mod tests {
     use super::*;
     use crate::GenericFamilies;
+    use serde_json::json;
 
     fn fonts_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -353,10 +327,10 @@ mod tests {
         assert_eq!(face.family, "Tuffy");
         assert_eq!(face.families.first().map(String::as_str), Some("Tuffy"));
         assert_eq!(face.post_script_name, "Tuffy");
-        assert_eq!(face.style, FontStyle::Normal);
+        assert_eq!(face.style, Style::Normal);
         // Tuffy.ttf declares usWeightClass 500 (medium).
         assert_eq!(face.weight, 500);
-        assert_eq!(face.stretch, FontStretch::Normal);
+        assert_eq!(face.stretch, Stretch::Normal);
         assert!(!face.monospaced);
         assert_eq!(
             face.path.as_deref(),
@@ -380,29 +354,9 @@ mod tests {
         assert_eq!(value["style"], "normal");
         assert_eq!(value["stretch"], "normal");
         assert_eq!(
-            serde_json::to_value(FontStretch::SemiCondensed).unwrap(),
+            serde_json::to_value(Stretch::SemiCondensed).unwrap(),
             "semi-condensed"
         );
-    }
-
-    #[test]
-    fn style_and_stretch_round_trip_through_fontdb() {
-        for style in [FontStyle::Normal, FontStyle::Italic, FontStyle::Oblique] {
-            assert_eq!(FontStyle::from(Style::from(style)), style);
-        }
-        for stretch in [
-            FontStretch::UltraCondensed,
-            FontStretch::ExtraCondensed,
-            FontStretch::Condensed,
-            FontStretch::SemiCondensed,
-            FontStretch::Normal,
-            FontStretch::SemiExpanded,
-            FontStretch::Expanded,
-            FontStretch::ExtraExpanded,
-            FontStretch::UltraExpanded,
-        ] {
-            assert_eq!(FontStretch::from(Stretch::from(stretch)), stretch);
-        }
     }
 
     #[test]
@@ -661,8 +615,84 @@ mod tests {
             .run(&database)
             .unwrap();
         assert_eq!(face.family, "Tuffy");
-        assert_eq!(FontQuery::new(vec!["Nope".into()]).run(&database), None);
-        assert_eq!(FontQuery::new(Vec::new()).run(&database), None);
+        assert_eq!(
+            FontQuery::new(vec!["Nope".into(), "Absent".into()]).run(&database),
+            Err(QueryError::NoMatch(vec!["Nope".into(), "Absent".into()]))
+        );
+    }
+
+    /// The checks the command line and the tool schema make are made again
+    /// by `run`, with the messages both binaries print.
+    #[test]
+    fn query_refuses_no_family_and_a_weight_outside_the_css_range() {
+        let database = tuffy_only().build_database().unwrap();
+        let none = FontQuery::new(Vec::new()).run(&database).unwrap_err();
+        assert_eq!(none, QueryError::NoFamilies);
+        assert_eq!(none.to_string(), "families must name at least one family");
+
+        let with_weight = |weight| FontQuery {
+            weight,
+            ..FontQuery::new(vec!["Tuffy".into()])
+        };
+        for (weight, message) in [
+            (0, "weight must be between 1 and 1000, got 0"),
+            (1001, "weight must be between 1 and 1000, got 1001"),
+        ] {
+            let error = with_weight(weight).run(&database).unwrap_err();
+            assert_eq!(error, QueryError::WeightOutOfRange(weight));
+            assert_eq!(error.to_string(), message);
+        }
+        for weight in [1, 1000] {
+            let face = with_weight(weight).run(&database).unwrap();
+            assert_eq!(face.family, "Tuffy", "{weight}");
+        }
+    }
+
+    #[test]
+    fn a_query_without_a_match_names_the_families_it_tried() {
+        let database = tuffy_only().build_database().unwrap();
+        let error = FontQuery::new(vec!["Missing".into(), "Absent".into()])
+            .run(&database)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "no face matches Missing, Absent");
+    }
+
+    #[test]
+    fn query_denies_unknown_fields() {
+        let message = serde_json::from_value::<FontQuery>(json!({ "families": ["A"], "extra": 1 }))
+            .expect_err("an unknown field is refused")
+            .to_string();
+        assert!(message.contains("unknown field `extra`"), "{message}");
+    }
+
+    #[test]
+    fn query_defaults_to_a_normal_face() {
+        let query: FontQuery = serde_json::from_value(json!({ "families": ["Tuffy"] })).unwrap();
+        assert_eq!(query.weight, 400);
+        assert_eq!(query.style, Style::Normal);
+        assert_eq!(query.stretch, Stretch::Normal);
+        assert_eq!(query, FontQuery::new(vec!["Tuffy".into()]));
+    }
+
+    #[test]
+    fn query_reads_css_keywords() {
+        let query: FontQuery = serde_json::from_value(json!({
+            "families": ["Tuffy"], "style": "oblique", "stretch": "semi-expanded"
+        }))
+        .unwrap();
+        assert_eq!(query.style, Style::Oblique);
+        assert_eq!(query.stretch, Stretch::SemiExpanded);
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn query_schema_bounds_weight_and_requires_a_family() {
+        let schema = serde_json::to_value(schemars::schema_for!(FontQuery)).unwrap();
+        let properties = &schema["properties"];
+        assert_eq!(properties["weight"]["minimum"], json!(1));
+        assert_eq!(properties["weight"]["maximum"], json!(1000));
+        assert_eq!(properties["families"]["minItems"], json!(1));
+        assert_eq!(schema["required"], json!(["families"]));
     }
 
     #[test]
@@ -670,7 +700,7 @@ mod tests {
         let mut config = tuffy_only();
         assert_eq!(
             FontQuery::new(vec!["serif".into()]).run(&config.build_database().unwrap()),
-            None
+            Err(QueryError::NoMatch(vec!["serif".into()]))
         );
         config.generic = GenericFamilies {
             serif: Some("Tuffy".into()),
@@ -684,7 +714,7 @@ mod tests {
             let face = FontQuery::new(vec![generic.into()]).run(&database);
             assert_eq!(
                 face.map(|face| face.family).as_deref(),
-                Some("Tuffy"),
+                Ok("Tuffy"),
                 "{generic}"
             );
         }

@@ -9,11 +9,11 @@ use rmcp::{
     tool, tool_router,
 };
 
-use fontgres_core::models::{self, Face, FontQuery};
+use fontgres_core::models::{self, Face, FontQuery, QueryError};
 
 use super::error::ToolError;
 use super::handler::AppTools;
-use super::params::{ListFacesParams, QueryFontParams};
+use super::params::ListFacesParams;
 use super::types::Listed;
 
 #[tool_router(router = font_router, vis = "pub(super)")]
@@ -67,26 +67,16 @@ impl AppTools {
     )]
     async fn query_font(
         &self,
-        Parameters(params): Parameters<QueryFontParams>,
+        Parameters(query): Parameters<FontQuery>,
     ) -> Result<Json<Face>, ToolError> {
-        if params.families.is_empty() {
-            return Err("families must name at least one family".to_string().into());
-        }
-        if !(1..=1000).contains(&params.weight) {
-            return Err(format!("weight must be between 1 and 1000, got {}", params.weight).into());
-        }
-        let query = FontQuery {
-            families: params.families,
-            weight: params.weight,
-            style: params.style,
-            stretch: params.stretch,
-        };
-        query.run(&self.database).map(Json).ok_or_else(|| {
-            format!(
-                "no face matches {}; use fontgres_list_families to see the loaded families",
-                query.families.join(", ")
-            )
-            .into()
+        query.run(&self.database).map(Json).map_err(|error| {
+            let message = match error {
+                QueryError::NoMatch(_) => {
+                    format!("{error}; use fontgres_list_families to see the loaded families")
+                }
+                QueryError::NoFamilies | QueryError::WeightOutOfRange(_) => error.to_string(),
+            };
+            message.into()
         })
     }
 }

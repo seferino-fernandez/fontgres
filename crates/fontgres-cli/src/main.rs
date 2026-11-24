@@ -13,6 +13,7 @@ use anyhow::Context as _;
 use fontgres_core::cli::{self, LevelFilter, Logging, SetupCommand, SharedArgs};
 use fontgres_core::config::UnreadTable;
 use fontgres_core::env::SystemEnv;
+use fontgres_core::models::FontQuery;
 
 /// Only errors are reported unless `-v`/`-q`, `FONTGRES_LOG_LEVEL` or
 /// `[log] level` says otherwise.
@@ -46,7 +47,7 @@ enum Command {
     /// List font family names.
     Families,
     /// Find the face that best matches a CSS-like query.
-    Query(commands::QueryArgs),
+    Query(FontQuery),
     #[command(flatten)]
     Setup(SetupCommand),
 }
@@ -91,7 +92,7 @@ fn try_main() -> anyhow::Result<()> {
     match &cli.command {
         Command::Faces(args) => commands::faces(&database, args, cli.output),
         Command::Families => commands::families(&database, cli.output),
-        Command::Query(args) => commands::query(&database, args, cli.output),
+        Command::Query(query) => commands::query(&database, query, cli.output),
         // Handled by the early return above.
         Command::Setup(_) => Ok(()),
     }

@@ -66,32 +66,44 @@ impl Default for Weight {
     }
 }
 
-/// The width of a face relative to its family's normal width, as the CSS
-/// `font-stretch`.
-///
-/// Read from the `OS/2` table's
-/// [`usWidthClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
-/// The variants are ordered from narrowest to widest.
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
-pub enum Width {
-    /// 50% of normal width.
-    UltraCondensed,
-    /// 62.5% of normal width.
-    ExtraCondensed,
-    /// 75% of normal width.
-    Condensed,
-    /// 87.5% of normal width.
-    SemiCondensed,
-    /// Normal width.
-    Normal,
-    /// 112.5% of normal width.
-    SemiExpanded,
-    /// 125% of normal width.
-    Expanded,
-    /// 150% of normal width.
-    ExtraExpanded,
-    /// 200% of normal width.
-    UltraExpanded,
+css_keywords! {
+    /// The width of a face relative to its family's normal width, as the CSS
+    /// `font-stretch`.
+    ///
+    /// Read from the `OS/2` table's
+    /// [`usWidthClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
+    /// The variants are ordered from narrowest to widest.
+    ///
+    /// With the `cli` feature it is read and written as its CSS keyword, such as
+    /// `semi-condensed`, by serde and as a command-line value.
+    #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            rename = "Stretch",
+            description = "A face's width, the CSS `font-stretch`."
+        )
+    )]
+    pub enum Width {
+        /// 50% of normal width.
+        UltraCondensed,
+        /// 62.5% of normal width.
+        ExtraCondensed,
+        /// 75% of normal width.
+        Condensed,
+        /// 87.5% of normal width.
+        SemiCondensed,
+        /// Normal width.
+        Normal,
+        /// 112.5% of normal width.
+        SemiExpanded,
+        /// 125% of normal width.
+        Expanded,
+        /// 150% of normal width.
+        ExtraExpanded,
+        /// 200% of normal width.
+        UltraExpanded,
+    }
 }
 
 impl Width {

@@ -23,9 +23,10 @@ memmap = ["fs", "dep:memmap2"]
 # Enables minimal fontconfig support on Linux.
 # Must be enabled for NixOS, otherwise no fonts will be loaded.
 fontconfig = ["dep:fontconfig-parser", "fs"]
-# Configuration loading, the font views and the `completions`/`man`
-# subcommand helpers shared by the workspace binaries. Off by default so
-# library users get only the font database.
+# Configuration loading, the font views and query, and the `completions`/`man`
+# subcommand helpers shared by the workspace binaries, with `Style` and
+# `Stretch` read and written as CSS keywords. Off by default so library users
+# get only the font database.
 cli = [
   "fs",
   "dep:clap",
@@ -40,8 +41,8 @@ cli = [
   "dep:tracing",
   "dep:tracing-subscriber",
 ]
-# Derive `schemars::JsonSchema` on the font views so MCP consumers can
-# advertise tool output schemas.
+# Derive `schemars::JsonSchema` on the font views, the query, `Style` and
+# `Stretch` so MCP consumers can advertise tool schemas.
 schema = ["cli", "dep:schemars"]
 
 [dependencies]
