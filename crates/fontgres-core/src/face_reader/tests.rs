@@ -1,19 +1,26 @@
 //! Reading a face's properties from its font tables, with fonts built here
 //! byte by byte.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{string::ToString, vec, vec::Vec};
 
-use super::{
-    Database, FontLoadFailureReason, Language, Source, Stretch, Style, Weight, parse_face_info,
-};
+use super::{FaceProperties, Language, Stretch, read};
+use crate::{Database, FontLoadFailureReason, Style, Weight};
 
 const UNICODE: u16 = 0;
 const MACINTOSH: u16 = 1;
+const ISO: u16 = 2;
 const WINDOWS: u16 = 3;
+const MACINTOSH_ROMAN: u16 = 0;
+const MACINTOSH_JAPANESE: u16 = 1;
+const MACINTOSH_ENGLISH: u16 = 0;
+const MACINTOSH_FRENCH: u16 = 1;
 const WINDOWS_UNICODE_BMP: u16 = 1;
 const ENGLISH_US: u16 = 0x0409;
 const FRENCH: u16 = 0x040C;
 const FAMILY: u16 = 1;
+const SUBFAMILY: u16 = 2;
+const POST_SCRIPT_NAME: u16 = 6;
+const TYPOGRAPHIC_FAMILY: u16 = 16;
 const TRUETYPE: [u8; 4] = [0, 1, 0, 0];
 
 fn be16(value: usize) -> [u8; 2] {
@@ -55,14 +62,17 @@ fn font_at(start: usize, magic: [u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<
 }
 
 /// Returns a format 0 `name` table with one record per (platform, encoding,
-/// language, name ID, text); Macintosh text is stored as single bytes, the
-/// rest as UTF-16BE.
-fn name_table(names: &[(u16, u16, u16, u16, &str)]) -> Vec<u8> {
+/// language, name ID, text). Macintosh text is stored one byte per character,
+/// the byte being the character's code point, so `\u{8e}` stores the byte
+/// Macintosh Roman reads as `é`; the rest is stored as UTF-16BE.
+fn name_table(names: &[NameRecord<'_>]) -> Vec<u8> {
     let mut records = Vec::new();
     let mut storage = Vec::new();
     for &(platform, encoding, language, name_id, text) in names {
         let bytes: Vec<u8> = if platform == MACINTOSH {
-            text.bytes().collect()
+            text.chars()
+                .map(|c| u8::try_from(u32::from(c)).unwrap())
+                .collect()
         } else {
             text.encode_utf16().flat_map(u16::to_be_bytes).collect()
         };
@@ -81,8 +91,33 @@ fn name_table(names: &[(u16, u16, u16, u16, &str)]) -> Vec<u8> {
     table
 }
 
+/// One record of a `name` table: platform, encoding, language, name ID
+/// and text.
+type NameRecord<'a> = (u16, u16, u16, u16, &'a str);
+
+/// A record in English (United States), stored as Windows stores Unicode.
+const fn english(name_id: u16, text: &str) -> NameRecord<'_> {
+    (WINDOWS, WINDOWS_UNICODE_BMP, ENGLISH_US, name_id, text)
+}
+
+/// A record in French, stored as Windows stores Unicode.
+const fn french(name_id: u16, text: &str) -> NameRecord<'_> {
+    (WINDOWS, WINDOWS_UNICODE_BMP, FRENCH, name_id, text)
+}
+
+/// A record in Macintosh Roman, in the Macintosh `language`.
+const fn macintosh(language: u16, name_id: u16, text: &str) -> NameRecord<'_> {
+    (MACINTOSH, MACINTOSH_ROMAN, language, name_id, text)
+}
+
+/// Reads the one face of a TrueType font whose only table is a `name` table
+/// of `names`.
+fn parse_names(names: &[NameRecord<'_>]) -> Result<FaceProperties, FontLoadFailureReason> {
+    parse(&font(TRUETYPE, &[(b"name", name_table(names))]))
+}
+
 fn english_name(family: &str) -> Vec<u8> {
-    name_table(&[(WINDOWS, WINDOWS_UNICODE_BMP, ENGLISH_US, FAMILY, family)])
+    name_table(&[english(FAMILY, family)])
 }
 
 /// Returns an `OS/2` table of `len` bytes declaring `version`, the weight
@@ -107,27 +142,21 @@ fn post_table(italic_angle: u32, fixed_pitch: u32) -> Vec<u8> {
 
 /// Returns the face of a TrueType font holding `table` under `tag` and an
 /// English family name.
-fn named_face_with(tag: [u8; 4], table: Vec<u8>) -> super::FaceInfo {
-    parse(font(
+fn named_face_with(tag: [u8; 4], table: Vec<u8>) -> FaceProperties {
+    parse(&font(
         TRUETYPE,
         &[(&tag, table), (b"name", english_name("Font"))],
     ))
     .unwrap()
 }
 
-fn parse(data: Vec<u8>) -> Result<super::FaceInfo, FontLoadFailureReason> {
-    let data = Arc::new(data);
-    let source = Source::Binary(Arc::<Vec<u8>>::clone(&data));
-    parse_face_info(source, &data, 0)
+fn parse(data: &[u8]) -> Result<FaceProperties, FontLoadFailureReason> {
+    read(data, 0)
 }
 
 #[test]
 fn the_english_us_family_comes_first() {
-    let names = name_table(&[
-        (WINDOWS, WINDOWS_UNICODE_BMP, FRENCH, FAMILY, "Police"),
-        (WINDOWS, WINDOWS_UNICODE_BMP, ENGLISH_US, FAMILY, "Font"),
-    ]);
-    let face = parse(font(TRUETYPE, &[(b"name", names)])).unwrap();
+    let face = parse_names(&[french(FAMILY, "Police"), english(FAMILY, "Font")]).unwrap();
     assert_eq!(
         face.families,
         [
@@ -138,21 +167,109 @@ fn the_english_us_family_comes_first() {
 }
 
 #[test]
+fn the_typographic_family_replaces_the_family() {
+    let face = parse_names(&[
+        english(FAMILY, "Font Light"),
+        english(SUBFAMILY, "Regular"),
+        english(TYPOGRAPHIC_FAMILY, "Font"),
+    ])
+    .unwrap();
+    assert_eq!(
+        face.families,
+        [("Font".to_string(), Language::English_UnitedStates)]
+    );
+}
+
+/// The Macintosh Roman family stands in for the English one no Unicode
+/// record gives. Only the first such record is read.
+#[test]
+fn a_macintosh_roman_family_is_read_when_no_unicode_family_is_english() {
+    let face = parse_names(&[
+        french(FAMILY, "Police"),
+        macintosh(MACINTOSH_ENGLISH, SUBFAMILY, "Regular"),
+        macintosh(MACINTOSH_ENGLISH, FAMILY, "\u{8e}t\u{8e}"),
+        macintosh(MACINTOSH_FRENCH, FAMILY, "Autre"),
+    ])
+    .unwrap();
+    assert_eq!(
+        face.families,
+        [
+            ("été".to_string(), Language::English_UnitedStates),
+            ("Police".to_string(), Language::French_France),
+        ]
+    );
+}
+
+#[test]
+fn a_macintosh_roman_family_is_left_out_beside_an_english_unicode_one() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        macintosh(MACINTOSH_ENGLISH, FAMILY, "Mac Font"),
+    ])
+    .unwrap();
+    assert_eq!(
+        face.families,
+        [("Font".to_string(), Language::English_UnitedStates)]
+    );
+}
+
+/// Of the single-byte encodings only Macintosh Roman is decoded.
+#[test]
+fn a_family_in_an_encoding_that_is_not_decoded_is_no_family() {
+    for (platform, encoding) in [(MACINTOSH, MACINTOSH_JAPANESE), (ISO, 0)] {
+        let error = parse_names(&[(platform, encoding, 0, FAMILY, "Font")]).unwrap_err();
+        assert!(
+            matches!(error, FontLoadFailureReason::NoFamilyName),
+            "platform {platform}, encoding {encoding}: {error}"
+        );
+    }
+}
+
+/// The first `PostScript` name in an encoding that is decoded is the face's,
+/// whichever records come before it.
+#[test]
+fn the_postscript_name_is_the_first_one_that_can_be_decoded() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        (MACINTOSH, MACINTOSH_JAPANESE, 0, POST_SCRIPT_NAME, "Nope"),
+        macintosh(MACINTOSH_ENGLISH, POST_SCRIPT_NAME, "Font-Mac"),
+        english(POST_SCRIPT_NAME, "Font-Windows"),
+    ])
+    .unwrap();
+    assert_eq!(face.post_script_name, "Font-Mac");
+}
+
+#[test]
+fn a_face_without_a_postscript_name_gets_one_from_its_family() {
+    let face = parse_names(&[english(FAMILY, "Two Words")]).unwrap();
+    assert_eq!(face.post_script_name, "Two-Words");
+}
+
+#[test]
+fn a_face_with_only_a_name_table_has_the_default_properties() {
+    let face = parse_names(&[english(FAMILY, "Font")]).unwrap();
+    assert_eq!(
+        (face.style, face.weight, face.stretch, face.monospaced),
+        (Style::Normal, Weight::NORMAL, Stretch::Normal, false)
+    );
+}
+
+#[test]
 fn a_unicode_platform_family_loads() {
     let names = name_table(&[(UNICODE, 3, 0, FAMILY, "Unicode Font")]);
-    let face = parse(font(TRUETYPE, &[(b"name", names)])).unwrap();
+    let face = parse(&font(TRUETYPE, &[(b"name", names)])).unwrap();
     assert_eq!(face.families[0].0, "Unicode Font");
 }
 
 #[test]
 fn an_opentype_font_loads() {
-    let face = parse(font(*b"OTTO", &[(b"name", english_name("Font"))])).unwrap();
+    let face = parse(&font(*b"OTTO", &[(b"name", english_name("Font"))])).unwrap();
     assert_eq!(face.families[0].0, "Font");
 }
 
 #[test]
 fn an_unknown_magic_is_malformed() {
-    let error = parse(font(*b"abcd", &[(b"name", english_name("Font"))])).unwrap_err();
+    let error = parse(&font(*b"abcd", &[(b"name", english_name("Font"))])).unwrap_err();
     assert!(
         matches!(error, FontLoadFailureReason::MalformedFont),
         "{error}"
@@ -161,7 +278,7 @@ fn an_unknown_magic_is_malformed() {
 
 #[test]
 fn a_font_without_a_family_is_unnamed() {
-    let error = parse(font(TRUETYPE, &[(b"name", name_table(&[]))])).unwrap_err();
+    let error = parse(&font(TRUETYPE, &[(b"name", name_table(&[]))])).unwrap_err();
     assert!(
         matches!(error, FontLoadFailureReason::NoFamilyName),
         "{error}"
