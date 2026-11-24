@@ -96,7 +96,7 @@ async fn stdio_protocol_exchange_and_eof_exit() {
         assert_eq!(call_response["id"], 3);
         assert_eq!(
             call_response["result"]["structuredContent"],
-            json!({"items": ["Tuffy"], "count": 1})
+            json!({"items": ["Tuffy"], "total": 1, "next_offset": null})
         );
 
         drop(stdin);

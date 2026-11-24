@@ -1,9 +1,8 @@
 //! The font commands: `faces`, `families` and `query`.
 
-use anyhow::bail;
 use clap::Args;
 use fontgres_core::Database;
-use fontgres_core::models::{self, Face, FontQuery, FontStretch, FontStyle};
+use fontgres_core::models::{self, Face, FontQuery};
 
 use crate::output::{self, OutputFormat};
 
@@ -13,25 +12,6 @@ pub(crate) struct FacesArgs {
     /// Only list faces of this family (any of its names, case-insensitive).
     #[arg(long)]
     family: Option<String>,
-}
-
-/// Arguments of `fontgres query`.
-#[derive(Args)]
-pub(crate) struct QueryArgs {
-    /// Families in priority order. Names match ignoring ASCII case;
-    /// `serif`, `sans-serif`, `cursive`, `fantasy` and `monospace` resolve
-    /// through the configured generic families.
-    #[arg(required = true, value_name = "FAMILY")]
-    families: Vec<String>,
-    /// Wanted weight: 100 (thin) to 900 (black); 400 is normal, 700 bold.
-    #[arg(long, default_value_t = 400, value_parser = clap::value_parser!(u16).range(1..=1000))]
-    weight: u16,
-    /// Wanted style.
-    #[arg(long, value_enum, default_value_t = FontStyle::Normal)]
-    style: FontStyle,
-    /// Wanted stretch.
-    #[arg(long, value_enum, default_value_t = FontStretch::Normal)]
-    stretch: FontStretch,
 }
 
 /// Table and CSV columns for a face.
@@ -52,7 +32,10 @@ pub(crate) fn faces(
     args: &FacesArgs,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let faces = models::faces(database, args.family.as_deref());
+    let faces: Vec<Face> = models::faces(database, args.family.as_deref())
+        .into_iter()
+        .map(Face::from)
+        .collect();
     match format {
         OutputFormat::Json => output::print_json(&faces),
         OutputFormat::Table => Ok(output::print_table(&FACE_HEADERS, &face_rows(&faces))?),
@@ -63,7 +46,7 @@ pub(crate) fn faces(
 /// Lists the distinct family names in `database`.
 pub(crate) fn families(database: &Database, format: OutputFormat) -> anyhow::Result<()> {
     let names = models::family_names(database);
-    let rows: Vec<Vec<String>> = names.iter().map(|name| vec![name.clone()]).collect();
+    let rows: Vec<Vec<String>> = names.iter().map(|name| vec![(*name).to_owned()]).collect();
     match format {
         OutputFormat::Json => output::print_json(&names),
         OutputFormat::Table => Ok(output::print_table(&["Family"], &rows)?),
@@ -71,21 +54,13 @@ pub(crate) fn families(database: &Database, format: OutputFormat) -> anyhow::Res
     }
 }
 
-/// Prints the face that best matches the query, failing when none does.
+/// Prints the face that best matches `query`, failing when none does.
 pub(crate) fn query(
     database: &Database,
-    args: &QueryArgs,
+    query: &FontQuery,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let query = FontQuery {
-        families: args.families.clone(),
-        weight: args.weight,
-        style: args.style,
-        stretch: args.stretch,
-    };
-    let Some(face) = query.run(database) else {
-        bail!("no face matches {}", args.families.join(", "));
-    };
+    let face = query.run(database)?;
     match format {
         OutputFormat::Json => output::print_json(&face),
         OutputFormat::Table => Ok(output::print_table(&FACE_HEADERS, &face_rows(&[face]))?),
@@ -125,11 +100,12 @@ fn keyword(value: &impl serde::Serialize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fontgres_core::{Stretch, Style};
 
     #[test]
     fn keyword_is_the_css_name() {
-        assert_eq!(keyword(&FontStretch::ExtraCondensed), "extra-condensed");
-        assert_eq!(keyword(&FontStyle::Italic), "italic");
+        assert_eq!(keyword(&Stretch::ExtraCondensed), "extra-condensed");
+        assert_eq!(keyword(&Style::Italic), "italic");
     }
 
     #[test]
@@ -138,9 +114,9 @@ mod tests {
             family: "Tuffy".into(),
             families: vec!["Tuffy".into()],
             post_script_name: "Tuffy-Bold".into(),
-            style: FontStyle::Oblique,
+            style: Style::Oblique,
             weight: 700,
-            stretch: FontStretch::Condensed,
+            stretch: Stretch::Condensed,
             monospaced: true,
             path: None,
             index: 2,

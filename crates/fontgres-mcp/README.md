@@ -19,14 +19,13 @@ and man pages), `cargo binstall fontgres-mcp` (prebuilt binary) or
 `cargo install fontgres-mcp` (from source). Archives for Linux, macOS and Windows
 are on [GitHub Releases](https://github.com/seferino-fernandez/fontgres/releases).
 
-## Transports
-
-- `stdio` for Claude Desktop, Claude Code, and other local MCP clients
-
 ## Quick start
 
+The server talks to its client over standard input and output, as Claude
+Desktop, Claude Code and other local MCP clients start it.
+
 ```bash
-fontgres-mcp --transport stdio
+fontgres-mcp
 fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 ```
 
@@ -37,7 +36,7 @@ fontgres-mcp --no-system-fonts --font-dir ~/projects/site/fonts
 
 `RUST_LOG` -> `-v`/`-q` (when passed) -> `FONTGRES_LOG_LEVEL` / config `log.level` -> default (`info`)
 
-So `fontgres-mcp -q --transport stdio` quiets a run without touching config, while
+So `fontgres-mcp -q` quiets a run without touching config, while
 config / `FONTGRES_LOG_LEVEL` still apply when no flag is given. An invalid
 configured level keeps the server from starting. Logs go to stderr,
 including the warning for a font file or face that cannot be loaded.
@@ -49,8 +48,8 @@ servers can tell this one's tools apart.
 
 | Tool                     | Description                                                        | Read-only |
 | ------------------------ | ------------------------------------------------------------------ | --------- |
-| `fontgres_list_faces`    | List the loaded faces; `family` narrows to one family              | Yes |
-| `fontgres_list_families` | List the distinct family names                                     | Yes |
+| `fontgres_list_faces`    | List the loaded faces, a page at a time; `family` narrows to one   | Yes |
+| `fontgres_list_families` | List the distinct family names, a page at a time                   | Yes |
 | `fontgres_query_font`    | Best face for `families`, `weight`, `style`, `stretch` (CSS-like) | Yes |
 
 Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1-1000),
@@ -59,18 +58,37 @@ Faces carry `family`, `families`, `post_script_name`, `weight` (CSS 1-1000),
 match ignoring ASCII case; the generic names `serif`, `sans-serif`,
 `cursive`, `fantasy` and `monospace` resolve through `[fonts.generic]`.
 
+### Paged listings
+
+Both list tools take `offset` and `limit` and return one page:
+
+```json
+{ "items": ["Arial", "Avenir"], "total": 418, "next_offset": 2 }
+```
+
+- `total` counts every match, on this page and every other.
+- `next_offset` is the `offset` that gets the next page, and `null` on the
+  last one. An `offset` past the end gives an empty last page.
+- `limit` is the most items in a page: 100 faces or 1,000 family names unless
+  the call gives another. A page holds fewer when more would exceed the
+  response budget, so follow `next_offset` instead of counting items.
+- Each call sorts the fonts loaded at startup, so pages do not shift between
+  calls.
+
 ### Tool calls
 
 Every call goes through the same checks, in order:
 
-1. **Arguments.** An argument the tool's input schema does not declare is
-   refused. Every params struct also denies unknown fields.
+1. **Arguments.** The arguments are read into the tool's parameters. An
+   argument the tool does not declare, which its closed input schema rules
+   out, is refused with an error that names it and lists the ones the tool
+   takes.
 1. **Response budget.** The whole serialized result, `content` and
    `structuredContent` together, is capped at `max_response_bytes` (default
-   1 MiB). A larger result is replaced by a small `response_too_large` error;
-   if even that cannot fit, the call fails with a protocol error. Listing every
-   face on a machine with many fonts can exceed the default; narrow it with
-   `family` or raise the cap.
+   1 MiB). A page of a listing is cut to fit. Any other result over the cap,
+   which takes one item larger than the cap itself, is replaced by a small
+   `response_too_large` error; if even that cannot fit, the call fails with a
+   protocol error. Raise the cap then.
 
 ## Shell completions
 

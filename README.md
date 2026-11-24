@@ -157,8 +157,8 @@ the CLI, and logs to stderr.
 
 Three read-only tools, `fontgres_list_faces`, `fontgres_list_families` and
 `fontgres_query_font`, answer from that snapshot. Tool input schemas are closed
-(`additionalProperties: false`), unknown arguments are refused, and tool
-results are capped to a configurable byte budget. See the
+(`additionalProperties: false`), unknown arguments are refused, listings are
+paged, and tool results are capped to a configurable byte budget. See the
 [`fontgres-mcp` README](crates/fontgres-mcp/README.md) for details.
 
 ## Quality guardrails

@@ -63,14 +63,15 @@ The `cli` feature adds what the CLI and MCP server have in common:
 - `models`: `FontsConfig::build_database`, which fails on a font directory it
   cannot read and on a named font file that gives no face, and logs a warning
   for any other file or face it cannot load; the serializable `Face` view with
-  CSS keywords for style and stretch, `FontQuery` (CSS generic names resolve
-  through the configured families), and the face and family listings.
+  CSS keywords for style and stretch, `FontQuery`, the one query both
+  binaries read (CSS generic names resolve through the configured families),
+  and the face and family listings.
 - `cli`: what the binaries do the same way at startup: the flags they share,
   the `completions` and `man` subcommands, the one configuration load, and
   the logging setup.
 
-The `schema` feature derives `schemars::JsonSchema` on the views for MCP
-output schemas.
+The `schema` feature derives `schemars::JsonSchema` on the views, the query,
+`Style` and `Stretch` for MCP tool schemas.
 
 ## Logging
 

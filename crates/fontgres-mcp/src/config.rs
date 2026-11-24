@@ -13,18 +13,20 @@ use std::fmt::{Debug, Formatter};
 
 const ENV_MCP_MAX_RESPONSE_BYTES: &str = "FONTGRES_MCP_MAX_RESPONSE_BYTES";
 
-/// Default cap on serialized tool-result size: 1 MiB. Generous enough not to
-/// clip normal results, while guarding against pathological payloads.
+/// Default cap on serialized tool-result size: 1 MiB. A default page of a
+/// listing is far below it; a call that asks for a larger page gets one cut to
+/// fit.
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// MCP-server-specific settings.
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct McpConfig {
-    /// Maximum exact serialized size (bytes) of a tool result. Results
-    /// exceeding this are replaced with a bounded `response_too_large` error;
-    /// if even that cannot fit, the call fails with a protocol error. Defaults
-    /// to 1 MiB.
+    /// Maximum exact serialized size (bytes) of a tool result. The list
+    /// tools cut each page to fit it. A result that one item alone pushes
+    /// over it is replaced with a bounded `response_too_large` error; if even
+    /// that cannot fit, the call fails with a protocol error. Defaults to
+    /// 1 MiB.
     pub max_response_bytes: usize,
 }
 

@@ -38,7 +38,8 @@ files = []
 # level = "info"
 
 [mcp]
-# Cap on the whole serialized tool result (bytes); oversized results are
-# replaced with a bounded `response_too_large` error, or fail with a protocol
-# error when even that cannot fit. Env: FONTGRES_MCP_MAX_RESPONSE_BYTES
+# Cap on the whole serialized tool result (bytes). The list tools cut each
+# page to fit it. A result that one item alone pushes over the cap is replaced
+# with a bounded `response_too_large` error, or fails with a protocol error
+# when even that cannot fit. Env: FONTGRES_MCP_MAX_RESPONSE_BYTES
 # max_response_bytes = 1048576  # default: 1 MiB

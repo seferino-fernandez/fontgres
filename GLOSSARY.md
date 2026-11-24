@@ -29,6 +29,9 @@ The one name a family is listed under: the English (United States) name when the
 **Generic family**:
 One of the CSS names serif, sans-serif, cursive, fantasy and monospace, each standing for one family chosen per database.
 
+**Query**:
+A request for one face: families in priority order, and the weight, style and stretch wanted.
+
 **System fonts**:
 The fonts a platform installs or lets its users install, found in the directories that platform's rules name.
 

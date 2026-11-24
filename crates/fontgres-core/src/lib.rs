@@ -66,8 +66,10 @@
 //!   list of directories, which misses the fonts on systems such as NixOS.
 //! - `cli`: the `config`, `models`, `error` and `cli` modules, which the
 //!   `fontgres` binaries share, and the typed parsers of the `env` module.
-//! - `schema`: derives `schemars::JsonSchema` on the `models` views. Implies
-//!   `cli`.
+//!   [`Style`] and [`Stretch`] are read and written as CSS keywords, by serde
+//!   and as command-line values.
+//! - `schema`: derives `schemars::JsonSchema` on the `models` views and
+//!   query, and on [`Style`] and [`Stretch`]. Implies `cli`.
 //!
 //! # Failures and logging
 //!
@@ -114,6 +116,24 @@ the logging setup.\n"
 )]
 
 extern crate alloc;
+
+/// Declares an enum of CSS keywords, such as `semi-condensed`.
+///
+/// With the `cli` feature the enum is read and written as its keyword, by
+/// serde and as a command-line value. With the `schema` feature it has a JSON
+/// schema.
+macro_rules! css_keywords {
+    ($(#[$attribute:meta])* $visibility:vis enum $name:ident { $($variants:tt)* }) => {
+        #[cfg_attr(
+            feature = "cli",
+            derive(serde::Serialize, serde::Deserialize, clap::ValueEnum),
+            serde(rename_all = "kebab-case")
+        )]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+        $(#[$attribute])*
+        $visibility enum $name { $($variants)* }
+    };
+}
 
 mod ttf_parser;
 
@@ -1354,15 +1374,24 @@ impl Weight {
     pub const BLACK: Weight = Weight(900);
 }
 
-/// The slant of a face, as the CSS `font-style`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum Style {
-    /// A face that is neither italic nor oblique.
-    Normal,
-    /// A form that is generally cursive in nature.
-    Italic,
-    /// A typically-sloped version of the regular face.
-    Oblique,
+css_keywords! {
+    /// The slant of a face, as the CSS `font-style`.
+    ///
+    /// With the `cli` feature it is read and written as its CSS keyword, by
+    /// serde and as a command-line value.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(description = "A face's style, the CSS `font-style`.")
+    )]
+    pub enum Style {
+        /// Neither italic nor oblique.
+        Normal,
+        /// A form that is generally cursive in nature.
+        Italic,
+        /// A typically sloped version of the regular face.
+        Oblique,
+    }
 }
 
 impl Default for Style {
