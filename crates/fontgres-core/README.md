@@ -1,32 +1,28 @@
 # fontgres-core
 
-An in-memory font database with CSS-like queries: a fork of
-[fontdb](https://github.com/RazrFalcon/fontdb) 0.24.0, renamed, and the engine
-behind the `fontgres` CLI and the `fontgres-mcp` server.
+An in-memory font database with CSS-like queries, and the engine behind the
+`fontgres` CLI and the `fontgres-mcp` server.
 
 ## The font database
 
-The crate root began as fontdb's API: load fonts from files, directories, raw
-data or the system into a `Database`, then list them or match one with a
-`Query`. It has since diverged:
+Load fonts from files, directories, raw data or the system into a
+`Database`, then list its faces or match one with a `Query`:
 
-- A database only gains faces. `remove_face` is gone; to drop faces, build a
-  new database.
+- A database only gains faces. To drop faces, build a new database.
 - Faces are kept in load order. `faces()` returns them as a slice, an `ID` is a
   face's position in it, and a query that finds several equally good faces
   returns the one named Regular or Roman if exactly one is, else the one
   loaded first. A directory loads in the order of its file names, so that
   order is the same on every machine.
-- `query` returns the face, not its ID, and `family_faces` returns every face
-  of a family.
+- `query` returns the face that matches best, and `family_faces` returns
+  every face of a family.
 - `FaceInfo` has the face's `subfamily` name, such as Bold Italic. Weight and
   style come from the `OS/2` table, then from `head.macStyle` when a face has
   no `OS/2` table, then from the words Bold, Italic and Oblique in the
   subfamily name when the tables say normal. A declared weight of 0 is read as
   400 and one above 1000 as 1000.
-- `Source::File` holds a shared path. `Source::SharedFile`,
-  `make_shared_face_data`, `make_face_data_unshared` and `face_source` are
-  gone.
+- A face's `Source` is the file it came from or the data it was loaded
+  from, and the faces of one font file share it.
 - Every load returns a `FontLoadReport`: the faces it added, how many font
   files it skipped as already loaded, and each file or face it could not load,
   with the reason. Nothing is logged about them. `load_fonts_dir` returns an
@@ -53,9 +49,9 @@ if let Some(face) = db.query(&query) {
 }
 ```
 
-Cargo features, as in fontdb: `std`, `fs`, `memmap` (memory-maps font files
-while parsing) and `fontconfig` (reads fontconfig's directory list on Linux),
-all on by default.
+Cargo features: `std`, `fs`, `memmap` (memory-maps font files while
+parsing) and `fontconfig` (reads fontconfig's directory list on Linux), all
+on by default.
 
 ## What the binaries share
 
@@ -81,8 +77,8 @@ The `schema` feature derives `schemars::JsonSchema` on the views, the query,
 
 ## Logging
 
-fontdb logs through the `log` crate (for example, a file it cannot parse).
-The binaries install a `tracing` subscriber, whose default `tracing-log`
+The database logs through the `log` crate (for example, a fontconfig file
+it skips). The binaries install a `tracing` subscriber, whose default `tracing-log`
 feature forwards those records, so they follow the binaries' log level under
 the `fontgres_core` target.
 

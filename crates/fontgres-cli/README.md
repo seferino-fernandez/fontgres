@@ -1,8 +1,7 @@
 # fontgres-cli
 
 List the fonts installed on this machine and find the face that best matches a
-CSS-style query, from the terminal. Built on [fontgres-core](../fontgres-core/),
-a fork of [fontdb](https://github.com/RazrFalcon/fontdb).
+CSS-style query, from the terminal. Built on [fontgres-core](../fontgres-core/).
 
 ## Install
 

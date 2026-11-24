@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 First release. fontgres-core is forked from fontdb 0.24.0 (commit `ecb707e`);
 fontdb's own history up to the fork is in
-[FONTDB-CHANGELOG.md](https://github.com/seferino-fernandez/fontgres/blob/main/crates/fontgres-core/FONTDB-CHANGELOG.md).
+[FONTDB-CHANGELOG.md](https://github.com/seferino-fernandez/fontgres/blob/e9e11ae7899e80db8fa7cee5413c5a87a699bb1a/crates/fontgres-core/FONTDB-CHANGELOG.md).
 
 ### Changed
 

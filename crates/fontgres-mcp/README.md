@@ -2,8 +2,7 @@
 
 MCP server that answers questions about the fonts on a machine, built on
 [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.x and
-[fontgres-core](../fontgres-core/), a fork of
-[fontdb](https://github.com/RazrFalcon/fontdb).
+[fontgres-core](../fontgres-core/).
 
 Implements the MCP [2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)
 specification, and negotiates down to every earlier version `rmcp` supports.

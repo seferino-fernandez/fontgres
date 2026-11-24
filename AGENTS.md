@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`fontgres-core` owns the font database (forked from fontdb 0.24.0) and what the binaries share: configuration, font loading, queries, the serializable font views and errors. `fontgres-cli` and `fontgres-mcp` adapt it to a terminal and to MCP, so font behaviour changes land in core.
+`fontgres-core` owns the font database and what the binaries share: configuration, font loading, queries, the serializable font views and errors. `fontgres-cli` and `fontgres-mcp` adapt it to a terminal and to MCP, so font behaviour changes land in core.
 ## Quality gates
 
 Each rule names the check that enforces it. [docs/quality-guardrails.md](docs/quality-guardrails.md) lists every tool and what it catches.

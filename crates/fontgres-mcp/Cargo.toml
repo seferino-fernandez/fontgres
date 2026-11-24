@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Model Context Protocol server for querying installed fonts"
 readme = "README.md"
-keywords = ["mcp", "mcp-server", "llm", "font", "fontdb"]
+keywords = ["mcp", "mcp-server", "llm", "font", "css"]
 categories = ["text-processing", "development-tools"]
 
 # cargo-binstall fetches the archives release-binaries.yml attaches to each
