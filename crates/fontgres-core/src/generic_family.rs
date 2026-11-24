@@ -3,15 +3,15 @@
 use alloc::{string::String, vec::Vec};
 
 /// One fontconfig `<alias>`: the family it is for and its three family lists.
-pub(crate) struct Alias<'a> {
+pub(crate) struct Alias {
     /// The aliased family, such as `serif`.
-    pub(crate) family: &'a str,
+    pub(crate) family: String,
     /// The `<prefer>` families.
-    pub(crate) prefer: &'a [String],
+    pub(crate) prefer: Vec<String>,
     /// The `<accept>` families.
-    pub(crate) accept: &'a [String],
+    pub(crate) accept: Vec<String>,
     /// The `<default>` families.
-    pub(crate) default: &'a [String],
+    pub(crate) default: Vec<String>,
 }
 
 /// Returns the family that `generic` resolves to, given the aliases in config
@@ -26,11 +26,11 @@ pub(crate) struct Alias<'a> {
 /// With none installed, the first family tried is kept, as fontconfig would
 /// name it; with no alias for `generic`, the result is `None`.
 pub(crate) fn resolve<'a>(
-    aliases: &[Alias<'a>],
+    aliases: &'a [Alias],
     generic: &[&str],
     is_installed: impl Fn(&str) -> bool,
 ) -> Option<&'a str> {
-    let aliases: Vec<&Alias<'a>> = aliases
+    let aliases: Vec<&Alias> = aliases
         .iter()
         .filter(|alias| {
             generic
@@ -40,9 +40,9 @@ pub(crate) fn resolve<'a>(
         .collect();
     let mut candidates = aliases
         .iter()
-        .flat_map(|alias| alias.prefer)
-        .chain(aliases.iter().rev().flat_map(|alias| alias.accept))
-        .chain(aliases.iter().flat_map(|alias| alias.default))
+        .flat_map(|alias| &alias.prefer)
+        .chain(aliases.iter().rev().flat_map(|alias| &alias.accept))
+        .chain(aliases.iter().flat_map(|alias| &alias.default))
         .map(String::as_str);
     let first = candidates.clone().next()?;
     Some(candidates.find(|name| is_installed(name)).unwrap_or(first))
@@ -57,32 +57,13 @@ mod tests {
         list.iter().map(|name| (*name).to_owned()).collect()
     }
 
-    struct Lists {
-        family: &'static str,
-        prefer: Vec<String>,
-        accept: Vec<String>,
-        default: Vec<String>,
-    }
-
-    fn lists(family: &'static str, prefer: &[&str], accept: &[&str], default: &[&str]) -> Lists {
-        Lists {
-            family,
+    fn alias(family: &str, prefer: &[&str], accept: &[&str], default: &[&str]) -> Alias {
+        Alias {
+            family: family.to_owned(),
             prefer: names(prefer),
             accept: names(accept),
             default: names(default),
         }
-    }
-
-    fn aliases(lists: &[Lists]) -> Vec<Alias<'_>> {
-        lists
-            .iter()
-            .map(|lists| Alias {
-                family: lists.family,
-                prefer: &lists.prefer,
-                accept: &lists.accept,
-                default: &lists.default,
-            })
-            .collect()
     }
 
     fn installed(families: &'static [&'static str]) -> impl Fn(&str) -> bool {
@@ -94,11 +75,11 @@ mod tests {
         // URW base35 adds a serif alias preferring a symbol font; when it comes
         // last it must not win over the installed family preferred earlier.
         let config = [
-            lists("serif", &["Missing Serif", "DejaVu Serif"], &[], &[]),
-            lists("serif", &["Standard Symbols PS"], &[], &[]),
+            alias("serif", &["Missing Serif", "DejaVu Serif"], &[], &[]),
+            alias("serif", &["Standard Symbols PS"], &[], &[]),
         ];
         let found = resolve(
-            &aliases(&config),
+            &config,
             &["serif"],
             installed(&["DejaVu Serif", "Standard Symbols PS"]),
         );
@@ -107,42 +88,36 @@ mod tests {
 
     #[test]
     fn uninstalled_preferences_are_skipped() {
-        let config = [lists(
+        let config = [alias(
             "serif",
             &["Missing Serif"],
             &["Accepted Serif"],
             &["Default Serif"],
         )];
-        let found = resolve(&aliases(&config), &["serif"], installed(&["Default Serif"]));
+        let found = resolve(&config, &["serif"], installed(&["Default Serif"]));
         assert_eq!(found, Some("Default Serif"));
     }
 
     #[test]
     fn without_an_installed_family_the_first_one_tried_is_kept() {
         let config = [
-            lists("monospace", &[], &["Missing Accept"], &[]),
-            lists("monospace", &["Missing Mono"], &[], &[]),
+            alias("monospace", &[], &["Missing Accept"], &[]),
+            alias("monospace", &["Missing Mono"], &[], &[]),
         ];
-        let found = resolve(&aliases(&config), &["monospace"], installed(&[]));
+        let found = resolve(&config, &["monospace"], installed(&[]));
         assert_eq!(found, Some("Missing Mono"));
     }
 
     #[test]
     fn prefer_comes_before_accept_and_accept_before_default() {
         let config = [
-            lists("cursive", &[], &["Accepted"], &["Defaulted"]),
-            lists("cursive", &["Preferred"], &[], &[]),
+            alias("cursive", &[], &["Accepted"], &["Defaulted"]),
+            alias("cursive", &["Preferred"], &[], &[]),
         ];
         let all = installed(&["Preferred", "Accepted", "Defaulted"]);
-        assert_eq!(
-            resolve(&aliases(&config), &["cursive"], all),
-            Some("Preferred")
-        );
+        assert_eq!(resolve(&config, &["cursive"], all), Some("Preferred"));
         let no_prefer = installed(&["Accepted", "Defaulted"]);
-        assert_eq!(
-            resolve(&aliases(&config), &["cursive"], no_prefer),
-            Some("Accepted")
-        );
+        assert_eq!(resolve(&config, &["cursive"], no_prefer), Some("Accepted"));
     }
 
     #[test]
@@ -150,38 +125,32 @@ mod tests {
         // fontconfig inserts each alias's accept list right after the generic
         // family, so the last alias's list ends up first.
         let config = [
-            lists("fantasy", &[], &["First Alias"], &[]),
-            lists("fantasy", &[], &["Second Alias"], &[]),
+            alias("fantasy", &[], &["First Alias"], &[]),
+            alias("fantasy", &[], &["Second Alias"], &[]),
         ];
         let both = installed(&["First Alias", "Second Alias"]);
-        assert_eq!(
-            resolve(&aliases(&config), &["fantasy"], both),
-            Some("Second Alias")
-        );
+        assert_eq!(resolve(&config, &["fantasy"], both), Some("Second Alias"));
     }
 
     #[test]
     fn default_families_keep_their_config_order() {
         let config = [
-            lists("serif", &[], &[], &["First Default"]),
-            lists("serif", &[], &[], &["Second Default"]),
+            alias("serif", &[], &[], &["First Default"]),
+            alias("serif", &[], &[], &["Second Default"]),
         ];
         let both = installed(&["First Default", "Second Default"]);
-        assert_eq!(
-            resolve(&aliases(&config), &["serif"], both),
-            Some("First Default")
-        );
+        assert_eq!(resolve(&config, &["serif"], both), Some("First Default"));
     }
 
     #[test]
     fn alias_names_match_any_listed_spelling_ignoring_case() {
         let config = [
-            lists("Sans Serif", &["Spaced"], &[], &[]),
-            lists("SANS-SERIF", &["Hyphenated"], &[], &[]),
-            lists("serif", &["Other Generic"], &[], &[]),
+            alias("Sans Serif", &["Spaced"], &[], &[]),
+            alias("SANS-SERIF", &["Hyphenated"], &[], &[]),
+            alias("serif", &["Other Generic"], &[], &[]),
         ];
         let found = resolve(
-            &aliases(&config),
+            &config,
             &["sans-serif", "sans serif"],
             installed(&["Hyphenated"]),
         );
@@ -190,13 +159,9 @@ mod tests {
 
     #[test]
     fn a_generic_without_aliases_resolves_to_nothing() {
-        let config = [lists("serif", &["DejaVu Serif"], &[], &[])];
+        let config = [alias("serif", &["DejaVu Serif"], &[], &[])];
         assert_eq!(
-            resolve(
-                &aliases(&config),
-                &["monospace"],
-                installed(&["DejaVu Serif"])
-            ),
+            resolve(&config, &["monospace"], installed(&["DejaVu Serif"])),
             None
         );
     }

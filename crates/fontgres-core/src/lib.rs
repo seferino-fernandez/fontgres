@@ -54,15 +54,15 @@
 //! - `std` (default): links the standard library. Without it the crate is
 //!   `no_std` with `alloc`, and fonts load only from in-memory data.
 //! - `fs` (default): loading fonts from files, directories and the system's
-//!   font directories.
+//!   font directories, and the `env` module.
 //! - `memmap` (default): memory-maps font files while reading them instead of
 //!   copying them into memory.
 //! - `fontconfig` (default): on Linux and other Unix systems except macOS,
 //!   iOS and Android, reads the font directories and generic families from
 //!   fontconfig's configuration. Without it, system fonts load from a fixed
 //!   list of directories, which misses the fonts on systems such as NixOS.
-//! - `cli`: the `config`, `models`, `env`, `error` and `cli` modules,
-//!   which the `fontgres` binaries share.
+//! - `cli`: the `config`, `models`, `error` and `cli` modules, which the
+//!   `fontgres` binaries share, and the typed parsers of the `env` module.
 //! - `schema`: derives `schemars::JsonSchema` on the `models` views. Implies
 //!   `cli`.
 //!
@@ -102,7 +102,8 @@ variables, `config.toml`, defaults) for which fonts to load and how to log.\n\
 - [`models`]: [`FontsConfig::build_database`], the serializable \
 [`models::Face`] view, [`models::FontQuery`] and the face and family \
 listings.\n\
-- [`env`](mod@env): the environment-variable source the configuration reads through.\n\
+- [`env`](mod@env): the environment-variable source the configuration reads \
+through, and its typed parsers.\n\
 - [`error`]: [`Error`] and [`ConfigError`].\n\
 - [`cli`]: the `completions` and `man` subcommand helpers.\n"
 )]
@@ -630,8 +631,9 @@ impl Database {
     /// [`load_fonts_dir`](Database::load_fonts_dir) or
     /// [`load_font_file`](Database::load_font_file):
     ///
-    /// - Windows: `%SYSTEMROOT%\Fonts` (or `C:\Windows\Fonts`), and the
-    ///   per-user font directories under `%USERPROFILE%\AppData`.
+    /// - Windows: `%SYSTEMROOT%\Fonts`, or `C:\Windows\Fonts` when the
+    ///   variable is unset or not Unicode, and the per-user font directories
+    ///   under `%USERPROFILE%\AppData`.
     /// - macOS and iOS: `/Library/Fonts`, `/System/Library/Fonts`, the
     ///   downloadable fonts under `/System/Library/AssetsV2`,
     ///   `/Network/Library/Fonts` and `~/Library/Fonts`.
@@ -657,178 +659,30 @@ impl Database {
     /// [`load_fonts_dir`](Database::load_fonts_dir) returns does.
     #[cfg(feature = "fs")]
     pub fn load_system_fonts(&mut self) -> FontLoadReport {
-        #[cfg(target_os = "windows")]
-        let report = {
-            let mut walk = FontDirWalk::default();
-            if let Some(ref system_root) = std::env::var_os("SYSTEMROOT") {
-                let system_root_path = std::path::Path::new(system_root);
-                walk.find_font_files(&system_root_path.join("Fonts"));
-            } else {
-                walk.find_font_files("C:\\Windows\\Fonts\\".as_ref());
-            }
-
-            if let Ok(ref home) = std::env::var("USERPROFILE") {
-                let home_path = std::path::Path::new(home);
-                walk.find_font_files(&home_path.join("AppData\\Local\\Microsoft\\Windows\\Fonts"));
-                walk.find_font_files(
-                    &home_path.join("AppData\\Roaming\\Microsoft\\Windows\\Fonts"),
-                );
-            }
-            self.load_font_files(walk.files)
-        };
-
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        let report = {
-            let mut walk = FontDirWalk::default();
-            walk.find_font_files("/Library/Fonts".as_ref());
-            walk.find_font_files("/System/Library/Fonts".as_ref());
-            // Downloadable fonts, location varies on major macOS releases
-            let mut assets: Vec<_> = std::fs::read_dir("/System/Library/AssetsV2")
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|entry| {
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with("com_apple_MobileAsset_Font")
-                })
-                .map(|entry| entry.path())
-                .collect();
-            // The file system's order is not the same on every machine.
-            assets.sort_unstable();
-            for dir in &assets {
-                walk.find_font_files(dir);
-            }
-            walk.find_font_files("/Network/Library/Fonts".as_ref());
-
-            if let Ok(ref home) = std::env::var("HOME") {
-                let home_path = std::path::Path::new(home);
-                walk.find_font_files(&home_path.join("Library/Fonts"));
-            }
-            self.load_font_files(walk.files)
-        };
-
-        // Linux.
-        #[cfg(all(
-            unix,
-            feature = "fontconfig",
-            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-        ))]
-        let report = self.load_fontconfig();
-
-        #[cfg(all(
-            unix,
-            not(feature = "fontconfig"),
-            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-        ))]
-        let report = self.load_no_fontconfig();
-
-        // A platform with no known font directories.
-        #[cfg(not(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            all(unix, not(target_os = "android"))
-        )))]
-        let report = self.report_since(self.faces.len(), 0, Vec::new());
-
-        report
+        let found = system_fonts::find(&env::SystemEnv, std::path::Path::new("/"));
+        self.load_found_system_fonts(&found)
     }
 
-    // Linux.
-    #[cfg(all(
-        unix,
-        feature = "fs",
-        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-    ))]
-    fn load_no_fontconfig(&mut self) -> FontLoadReport {
+    /// Loads the font directories `found` lists, in its order, then points
+    /// each generic family its aliases name at a family.
+    #[cfg(feature = "fs")]
+    fn load_found_system_fonts(&mut self, found: &system_fonts::SystemFonts) -> FontLoadReport {
         let mut walk = FontDirWalk::default();
-        walk.find_font_files("/usr/share/fonts/".as_ref());
-        walk.find_font_files("/usr/local/share/fonts/".as_ref());
-
-        if let Ok(ref home) = std::env::var("HOME") {
-            let home_path = std::path::Path::new(home);
-            walk.find_font_files(&home_path.join(".fonts"));
-            walk.find_font_files(&home_path.join(".local/share/fonts"));
+        for dir in &found.dirs {
+            walk.find_font_files(dir);
         }
-        self.load_font_files(walk.files)
-    }
-
-    // Linux.
-    #[cfg(all(
-        unix,
-        feature = "fontconfig",
-        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-    ))]
-    fn load_fontconfig(&mut self) -> FontLoadReport {
-        use std::path::Path;
-
-        let mut fontconfig = fontconfig_parser::FontConfig::default();
-        let home = std::env::var("HOME");
-
-        if let Ok(ref config_file) = std::env::var("FONTCONFIG_FILE") {
-            merge_fontconfig(&mut fontconfig, Path::new(config_file));
-        } else {
-            let xdg_config_home = if let Ok(val) = std::env::var("XDG_CONFIG_HOME") {
-                Some(val.into())
-            } else if let Ok(ref home) = home {
-                // according to https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-                // $XDG_CONFIG_HOME should default to $HOME/.config if not set
-                Some(Path::new(home).join(".config"))
-            } else {
-                None
-            };
-
-            let read_global = match xdg_config_home {
-                Some(p) => !merge_fontconfig(&mut fontconfig, &p.join("fontconfig/fonts.conf")),
-                None => true,
-            };
-
-            for dir in SYSTEM_FONTCONFIG_DIRS {
-                if read_global {
-                    merge_fontconfig(&mut fontconfig, &Path::new(dir).join("local.conf"));
-                }
-                merge_fontconfig(&mut fontconfig, &Path::new(dir).join("fonts.conf"));
-            }
-        }
-
-        let report = if fontconfig.dirs.is_empty() {
-            log::warn!("Fallback to loading from known font dir paths.");
-            self.load_no_fontconfig()
-        } else {
-            let mut walk = FontDirWalk::default();
-            let home = home.as_ref().ok().map(Path::new);
-            let dirs = core::mem::take(&mut fontconfig.dirs)
-                .into_iter()
-                .filter_map(|dir| expand_home(dir.path, home));
-            for path in dirs {
-                walk.find_font_files(&path);
-            }
-            self.load_font_files(walk.files)
-        };
-
+        let report = self.load_font_files(walk.files);
         // Generic families resolve after loading, so each can skip the
         // families fontconfig prefers that are not installed.
-        self.set_generic_families_from_fontconfig(&fontconfig.aliases);
+        self.set_generic_families(&found.aliases);
         report
     }
 
-    #[cfg(all(
-        unix,
-        feature = "fontconfig",
-        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-    ))]
-    fn set_generic_families_from_fontconfig(&mut self, aliases: &[fontconfig_parser::Alias]) {
-        let aliases: Vec<generic_family::Alias<'_>> = aliases
-            .iter()
-            .map(|alias| generic_family::Alias {
-                family: &alias.alias,
-                prefer: &alias.prefer,
-                accept: &alias.accept,
-                default: &alias.default,
-            })
-            .collect();
+    /// Points each generic family that `aliases` name at the first installed
+    /// family in the order fontconfig tries them, or at the first one tried
+    /// when none is installed.
+    #[cfg(feature = "fs")]
+    fn set_generic_families(&mut self, aliases: &[generic_family::Alias]) {
         let [serif, sans_serif, monospace, cursive, fantasy] = [
             &["serif"][..],
             &["sans-serif", "sans serif"],
@@ -837,7 +691,7 @@ impl Database {
             &["fantasy"],
         ]
         .map(|generic| {
-            generic_family::resolve(&aliases, generic, |name| {
+            generic_family::resolve(aliases, generic, |name| {
                 self.family_faces(name).next().is_some()
             })
             .map(str::to_owned)
@@ -1161,68 +1015,6 @@ impl core::fmt::Debug for Source {
                 .finish(),
             #[cfg(feature = "fs")]
             Self::File(arg0) => f.debug_tuple("File").field(arg0).finish(),
-        }
-    }
-}
-
-/// The directories holding the system-wide fontconfig configuration,
-/// `fonts.conf` and `local.conf`. On FreeBSD and `DragonFly`, fontconfig
-/// installed from ports reads its configuration from `/usr/local/etc/fonts`.
-#[cfg(all(
-    feature = "fontconfig",
-    any(target_os = "freebsd", target_os = "dragonfly")
-))]
-const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts", "/usr/local/etc/fonts"];
-/// The directory holding the system-wide fontconfig configuration,
-/// `fonts.conf` and `local.conf`.
-#[cfg(all(
-    unix,
-    feature = "fontconfig",
-    not(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "android",
-        target_os = "freebsd",
-        target_os = "dragonfly"
-    ))
-))]
-const SYSTEM_FONTCONFIG_DIRS: &[&str] = &["/etc/fonts"];
-
-/// Returns `path` with a leading `~` replaced by `home`, or `None` when it
-/// has one and the home directory is unknown.
-#[cfg(all(
-    unix,
-    feature = "fontconfig",
-    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-))]
-fn expand_home(
-    path: std::path::PathBuf,
-    home: Option<&std::path::Path>,
-) -> Option<std::path::PathBuf> {
-    match path.strip_prefix("~") {
-        Ok(in_home) => Some(home?.join(in_home)),
-        Err(_) => Some(path),
-    }
-}
-
-/// Merges the fontconfig configuration file at `path` into `fontconfig` and
-/// returns whether it merged. A file that is missing or does not parse is
-/// skipped and logged at debug level, since most of the files fontconfig
-/// looks for are optional.
-#[cfg(all(
-    unix,
-    feature = "fontconfig",
-    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-))]
-fn merge_fontconfig(
-    fontconfig: &mut fontconfig_parser::FontConfig,
-    path: &std::path::Path,
-) -> bool {
-    match fontconfig.merge_config(path) {
-        Ok(()) => true,
-        Err(error) => {
-            log::debug!("Skipped fontconfig file '{}': {error}.", path.display());
-            false
         }
     }
 }
@@ -1953,26 +1745,21 @@ const MAC_ROMAN: &[u16; 256] = &[
     0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
 ];
 
-// fontgres additions: configuration and CLI helpers shared by the workspace
-// binaries. They need `std`, so they sit behind the `cli` feature.
-
-#[cfg(any(
-    test,
-    all(
-        unix,
-        feature = "fontconfig",
-        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-    )
-))]
+#[cfg(feature = "fs")]
+pub mod env;
+#[cfg(any(test, feature = "fs"))]
 mod generic_family;
 mod postscript_name;
+#[cfg(feature = "fs")]
+mod system_fonts;
+
+// fontgres additions: configuration and CLI helpers shared by the workspace
+// binaries. They need `std`, so they sit behind the `cli` feature.
 
 #[cfg(feature = "cli")]
 pub mod cli;
 #[cfg(feature = "cli")]
 pub mod config;
-#[cfg(feature = "cli")]
-pub mod env;
 #[cfg(feature = "cli")]
 pub mod error;
 #[cfg(feature = "cli")]
@@ -1990,54 +1777,3 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 #[cfg(test)]
 mod face_info_tests;
-
-#[cfg(all(
-    test,
-    unix,
-    feature = "fontconfig",
-    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-))]
-mod fontconfig_tests {
-    use std::path::{Path, PathBuf};
-
-    use super::{expand_home, merge_fontconfig};
-
-    #[test]
-    fn a_leading_tilde_expands_to_the_home_directory() {
-        let home = Some(Path::new("/home/user"));
-        assert_eq!(
-            expand_home(PathBuf::from("~/fonts"), home),
-            Some(PathBuf::from("/home/user/fonts"))
-        );
-    }
-
-    #[test]
-    fn a_tilde_path_is_dropped_when_the_home_directory_is_unknown() {
-        assert_eq!(expand_home(PathBuf::from("~/fonts"), None), None);
-    }
-
-    #[test]
-    fn a_path_without_a_leading_tilde_is_kept() {
-        let path = PathBuf::from("/usr/share/fonts/~");
-        assert_eq!(expand_home(path.clone(), None), Some(path));
-    }
-
-    #[test]
-    fn a_configuration_file_merges() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fonts.conf");
-        std::fs::write(&path, "<fontconfig><dir>/srv/fonts</dir></fontconfig>").unwrap();
-        let mut fontconfig = fontconfig_parser::FontConfig::default();
-        assert!(merge_fontconfig(&mut fontconfig, &path));
-        assert_eq!(fontconfig.dirs.len(), 1);
-    }
-
-    #[test]
-    fn a_missing_configuration_file_does_not_merge() {
-        let mut fontconfig = fontconfig_parser::FontConfig::default();
-        assert!(!merge_fontconfig(
-            &mut fontconfig,
-            Path::new("/nonexistent/fontconfig/fonts.conf")
-        ));
-    }
-}
