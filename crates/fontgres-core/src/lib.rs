@@ -358,8 +358,8 @@ impl core::fmt::Display for FontLoadFailureReason {
 /// load the order that load documents. A collection adds its faces in the
 /// order the file holds them. [`faces`] and [`family_faces`] return faces in
 /// load order, an [`ID`] is a face's position in it, and when a [`query`]
-/// finds several faces equally good, the one loaded first wins. To drop
-/// faces, build a new database.
+/// finds several faces equally good and their names do not settle it, the
+/// one loaded first wins. To drop faces, build a new database.
 ///
 /// # Font files
 ///
@@ -777,7 +777,11 @@ impl Database {
     /// ignoring ASCII case, as [`FaceInfo::has_family`] does.
     ///
     /// When several faces of the family are equal in stretch, style and
-    /// weight, the one earliest in load order is returned.
+    /// weight, the one whose [`subfamily`](FaceInfo::subfamily) is *Regular*
+    /// or *Roman* is returned, ignoring ASCII case, if exactly one is. A
+    /// family's plain face and a face made for a special use, such as
+    /// *Ornaments*, often declare the same three properties. Otherwise the
+    /// one earliest in load order is returned.
     ///
     /// # Examples
     ///
@@ -914,6 +918,17 @@ pub struct FaceInfo {
     ///
     /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
     pub families: Vec<(String, Language)>,
+
+    /// The face's subfamily name, which tells it from the other faces of its
+    /// family, such as *Bold Italic*; empty when the font has none.
+    ///
+    /// This is the English (United States) name when the font has one.
+    ///
+    /// Corresponds to a *Typographic Subfamily* (ID 17) or a *Font
+    /// Subfamily* (ID 2) [name ID] in a TrueType font.
+    ///
+    /// [name ID]: https://docs.microsoft.com/en-us/typography/opentype/spec/name#name-ids
+    pub subfamily: String,
 
     /// The face's PostScript name.
     ///
@@ -1152,6 +1167,7 @@ fn parse_faces(source: &Source, data: &[u8]) -> ParsedFaces {
                     source: source.clone(),
                     index,
                     families: properties.families,
+                    subfamily: properties.subfamily,
                     post_script_name: properties.post_script_name,
                     style: properties.style,
                     weight: properties.weight,
@@ -1422,8 +1438,9 @@ impl Default for Style {
 ///
 /// Implements step 4 of
 /// <https://www.w3.org/TR/2018/REC-css-fonts-3-20180920/#font-style-matching>.
-/// Step 4d (`font-size`) does not apply. Of the faces left equal after the
-/// steps, the first in `candidates` wins; `candidates` come in load order.
+/// Step 4d (`font-size`) does not apply. The faces left equal after the
+/// steps are a tie, which [`tie_winner`] answers; `candidates` come in load
+/// order.
 #[inline(never)]
 fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option<&'a FaceInfo> {
     let mut matching_set = candidates.to_vec();
@@ -1440,7 +1457,25 @@ fn find_best_match<'a>(candidates: &[&'a FaceInfo], query: &Query<'_>) -> Option
     let weight = matching_weight(&matching_set, query.weight)?;
     matching_set.retain(|face| face.weight == weight);
 
-    matching_set.first().copied()
+    tie_winner(&matching_set)
+}
+
+/// Returns the face that answers a tie among `tied`, which come in load
+/// order: the one whose subfamily is Regular or Roman when exactly one is,
+/// else the first.
+fn tie_winner<'a>(tied: &[&'a FaceInfo]) -> Option<&'a FaceInfo> {
+    /// The subfamily names of a family's plain face.
+    const PLAIN: [&str; 2] = ["Regular", "Roman"];
+
+    let mut plain = tied.iter().copied().filter(|face| {
+        PLAIN
+            .iter()
+            .any(|name| face.subfamily.eq_ignore_ascii_case(name))
+    });
+    match (plain.next(), plain.next()) {
+        (Some(only), None) => Some(only),
+        _ => tied.first().copied(),
+    }
 }
 
 /// Returns the stretch of the face nearest `query`: an exact match, else the

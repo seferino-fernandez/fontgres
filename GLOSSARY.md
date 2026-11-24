@@ -23,6 +23,10 @@ _Avoid_: Explicit file, extra file
 The faces that share a family name. A face can carry its family name in several languages.
 _Avoid_: Typeface, font
 
+**Subfamily name**:
+The name that tells a face from the others of its family, such as Bold Italic. A family's plain face is usually named Regular or Roman.
+_Avoid_: Style name
+
 **Primary family name**:
 The one name a family is listed under: the English (United States) name when the font has one.
 
@@ -44,4 +48,4 @@ What one load tells its caller: the faces it added, how many font files it skipp
 _Avoid_: Load result, load summary
 
 **Tie**:
-Faces of one family that are equal in stretch, style and weight. A query answers a tie with the face earliest in load order.
+Faces of one family that are equal in stretch, style and weight. A query answers a tie with the one face whose subfamily name is Regular or Roman, when exactly one is, and otherwise with the face earliest in load order.

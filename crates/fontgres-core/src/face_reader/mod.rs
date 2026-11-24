@@ -24,6 +24,9 @@ pub(crate) struct FaceProperties {
     /// The face's family names with their languages, English (United States)
     /// first when the font has one. Never empty.
     pub(crate) families: Vec<(String, Language)>,
+    /// The face's subfamily name, such as `Bold Italic`: the English (United
+    /// States) one when the font has one, and empty when it has none.
+    pub(crate) subfamily: String,
     /// The face's `PostScript` name, made from the first family when the
     /// font has none.
     pub(crate) post_script_name: String,
@@ -77,6 +80,7 @@ pub(crate) fn read(data: &[u8], index: u32) -> Result<FaceProperties, FontLoadFa
         stretch: os2.map_or(Stretch::Normal, |table| table.width()),
         monospaced,
         families: names.families,
+        subfamily: names.subfamily,
         post_script_name: names.post_script_name,
     })
 }

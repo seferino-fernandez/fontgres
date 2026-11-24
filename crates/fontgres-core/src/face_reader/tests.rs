@@ -767,3 +767,39 @@ fn the_words_are_read_from_the_english_subfamily() {
     .unwrap();
     assert_eq!(face.weight, Weight::BOLD);
 }
+
+/// The subfamily is the typographic one when the font has it, in English
+/// when the font has that.
+#[test]
+fn the_subfamily_is_the_english_typographic_one() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        english(SUBFAMILY, "Regular"),
+        french(TYPOGRAPHIC_SUBFAMILY, "Maigre"),
+        english(TYPOGRAPHIC_SUBFAMILY, "Light"),
+    ])
+    .unwrap();
+    assert_eq!(face.subfamily, "Light");
+}
+
+#[test]
+fn the_subfamily_falls_back_to_the_font_subfamily_and_to_another_language() {
+    let face = parse_names(&[english(FAMILY, "Font"), french(SUBFAMILY, "Gras")]).unwrap();
+    assert_eq!(face.subfamily, "Gras");
+}
+
+#[test]
+fn a_macintosh_roman_subfamily_is_read_when_no_unicode_one_is_english() {
+    let face = parse_names(&[
+        english(FAMILY, "Font"),
+        macintosh(MACINTOSH_ENGLISH, SUBFAMILY, "Bold"),
+    ])
+    .unwrap();
+    assert_eq!(face.subfamily, "Bold");
+}
+
+#[test]
+fn a_face_without_a_subfamily_name_has_an_empty_one() {
+    let face = parse_names(&[english(FAMILY, "Font")]).unwrap();
+    assert_eq!(face.subfamily, "");
+}

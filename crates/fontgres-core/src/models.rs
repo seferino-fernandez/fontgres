@@ -26,6 +26,9 @@ pub struct Face {
     pub family: String,
     /// Every family name the face carries, in every language, primary first.
     pub families: Vec<String>,
+    /// The name that tells the face from the others of its family, such as
+    /// `Bold Italic`; empty when the font has none.
+    pub subfamily: String,
     /// The face's `PostScript` name.
     pub post_script_name: String,
     /// Normal, italic or oblique.
@@ -47,6 +50,7 @@ impl From<&FaceInfo> for Face {
         Self {
             family: primary_family(info).to_owned(),
             families: info.families.iter().map(|(name, _)| name.clone()).collect(),
+            subfamily: info.subfamily.clone(),
             post_script_name: info.post_script_name.clone(),
             style: info.style,
             weight: info.weight.0,
@@ -336,6 +340,7 @@ mod tests {
         let face = Face::from(faces[0]);
         assert_eq!(face.family, "Tuffy");
         assert_eq!(face.families.first().map(String::as_str), Some("Tuffy"));
+        assert_eq!(face.subfamily, "Regular");
         assert_eq!(face.post_script_name, "Tuffy");
         assert_eq!(face.style, Style::Normal);
         // Tuffy.ttf declares usWeightClass 500 (medium).
@@ -384,6 +389,7 @@ mod tests {
             source: Source::Binary(std::sync::Arc::new(Vec::<u8>::new())),
             index: 0,
             families: vec![(family.to_owned(), crate::Language::English_UnitedStates)],
+            subfamily: String::new(),
             post_script_name: name.to_owned(),
             style,
             weight: Weight(weight),
