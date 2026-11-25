@@ -14,7 +14,7 @@
 use crate::Result;
 use crate::env::{Env, env_non_empty, env_parse, env_parse_bool};
 use crate::error::ConfigError;
-use crate::{GenericFamilies, GenericFamily};
+use crate::{Database, FontLoadReport, GenericFamilies, GenericFamily};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
@@ -89,6 +89,72 @@ impl Default for FontsConfig {
             files: Vec::new(),
             generic: GenericFamilies::default(),
         }
+    }
+}
+
+/// Logs each font file and face that a load could not add.
+fn warn_of_failures(report: &FontLoadReport) {
+    for failure in report.failures() {
+        tracing::warn!("{failure}");
+    }
+}
+
+impl FontsConfig {
+    /// Builds a database holding the fonts this configuration names: the
+    /// system fonts when [`system`](Self::system) is set, then each directory
+    /// and file, with the generic families applied.
+    ///
+    /// A font file or face that a load could not add is skipped and logged
+    /// as a warning, except in a file named in [`files`](Self::files) that
+    /// gives no face, which is an error. A named file that an earlier
+    /// directory, or an earlier entry of `files`, already loaded is not
+    /// loaded again and is not an error.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::FontDir`](crate::Error::FontDir) when a directory cannot be
+    ///   read: it does not exist, is not a directory, or may not be listed.
+    /// - [`Error::FontFile`](crate::Error::FontFile) when a file cannot be
+    ///   read.
+    /// - [`Error::NoFaces`](crate::Error::NoFaces) when a file is read and
+    ///   gives no face, as a file that is not a font does.
+    pub fn build_database(&self) -> Result<Database> {
+        let mut database = Database::new();
+        if self.system {
+            warn_of_failures(&database.load_system_fonts());
+        }
+        for dir in &self.dirs {
+            let report = database
+                .load_fonts_dir(dir)
+                .map_err(|source| crate::Error::FontDir {
+                    path: dir.clone(),
+                    source,
+                })?;
+            warn_of_failures(&report);
+        }
+        for path in &self.files {
+            let report =
+                database
+                    .load_font_file(path)
+                    .map_err(|source| crate::Error::FontFile {
+                        path: path.clone(),
+                        source,
+                    })?;
+            if report.added().len() == 0 && report.skipped() == 0 {
+                let first = report.into_failures().into_iter().next();
+                return Err(crate::Error::NoFaces {
+                    path: path.clone(),
+                    reason: first.map(|failure| failure.reason),
+                });
+            }
+            warn_of_failures(&report);
+        }
+        for generic in GenericFamily::ALL {
+            if let Some(family) = self.generic.get(generic) {
+                database.set_generic_family(generic, family.as_str());
+            }
+        }
+        Ok(database)
     }
 }
 
@@ -810,5 +876,294 @@ mod tests {
         let blank = MapEnv::new().with("FONTGRES_LOG_LEVEL", " ");
         let config = load(&path, &ConfigOverrides::default(), &blank).unwrap();
         assert_eq!(config.log.level, Some(LevelFilter::WARN));
+    }
+}
+
+/// [`FontsConfig::build_database`]: the fonts a configuration names, the
+/// load failures it logs and the ones it returns.
+#[cfg(test)]
+mod build_database_tests {
+    use super::*;
+    use crate::models::{FontQuery, QueryError, family_names};
+
+    fn fonts_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fonts")
+    }
+
+    fn tuffy_only() -> FontsConfig {
+        FontsConfig {
+            system: false,
+            files: vec![fonts_dir().join("Tuffy.ttf")],
+            ..FontsConfig::default()
+        }
+    }
+
+    #[test]
+    fn dirs_load_every_font_inside() {
+        let config = FontsConfig {
+            system: false,
+            dirs: vec![fonts_dir()],
+            ..FontsConfig::default()
+        };
+        let database = config.build_database().unwrap();
+        assert_eq!(family_names(&database), ["Tuffy"]);
+    }
+
+    #[test]
+    fn the_same_dir_given_twice_loads_its_fonts_once() {
+        let once = FontsConfig {
+            system: false,
+            dirs: vec![fonts_dir()],
+            ..FontsConfig::default()
+        };
+        let twice = FontsConfig {
+            dirs: vec![fonts_dir(), fonts_dir()],
+            ..once.clone()
+        };
+        assert_eq!(
+            twice.build_database().unwrap().len(),
+            once.build_database().unwrap().len()
+        );
+    }
+
+    #[test]
+    fn duplicate_families_are_listed_once() {
+        let copies = tempfile::tempdir().unwrap();
+        let copy = copies.path().join("Tuffy.ttf");
+        std::fs::copy(fonts_dir().join("Tuffy.ttf"), &copy).unwrap();
+        let mut config = tuffy_only();
+        config.files.push(copy);
+        let database = config.build_database().unwrap();
+        assert_eq!(database.len(), 2);
+        assert_eq!(family_names(&database), ["Tuffy"]);
+    }
+
+    #[test]
+    fn missing_dir_and_file_are_errors_naming_the_path() {
+        let missing = fonts_dir().join("missing");
+        let config = FontsConfig {
+            system: false,
+            dirs: vec![missing.clone()],
+            ..FontsConfig::default()
+        };
+        let err = config.build_database().unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::Error::FontDir { path, source }
+                    if *path == missing && source.kind() == std::io::ErrorKind::NotFound
+            ),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains(&missing.display().to_string()),
+            "{err}"
+        );
+
+        let file_config = FontsConfig {
+            system: false,
+            files: vec![missing.join("x.ttf")],
+            ..FontsConfig::default()
+        };
+        let file_err = file_config.build_database().unwrap_err();
+        assert!(
+            matches!(file_err, crate::Error::FontFile { .. }),
+            "{file_err:?}"
+        );
+        assert!(file_err.to_string().contains("x.ttf"), "{file_err}");
+    }
+
+    /// A font file given where a directory belongs is not a directory that
+    /// can be read.
+    #[test]
+    fn a_file_given_as_a_dir_is_an_error() {
+        let file = fonts_dir().join("Tuffy.ttf");
+        let config = FontsConfig {
+            system: false,
+            dirs: vec![file.clone()],
+            ..FontsConfig::default()
+        };
+        let err = config.build_database().unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::FontDir { path, .. } if *path == file),
+            "{err:?}"
+        );
+    }
+
+    /// A directory holding a font and `not-a-font.ttf`, which is not one.
+    fn dir_with_a_file_that_is_not_a_font() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(fonts_dir().join("Tuffy.ttf"), dir.path().join("Tuffy.ttf")).unwrap();
+        std::fs::write(dir.path().join("not-a-font.ttf"), "plain text").unwrap();
+        dir
+    }
+
+    /// A directory may hold files that are not fonts; a file named on its own
+    /// may not be one.
+    #[test]
+    fn a_file_that_is_not_a_font_is_an_error_only_when_named() {
+        let dir = dir_with_a_file_that_is_not_a_font();
+        let not_a_font = dir.path().join("not-a-font.ttf");
+        let in_a_dir = FontsConfig {
+            system: false,
+            dirs: vec![dir.path().to_path_buf()],
+            ..FontsConfig::default()
+        };
+        assert_eq!(in_a_dir.build_database().unwrap().len(), 1);
+
+        let named = FontsConfig {
+            system: false,
+            files: vec![not_a_font.clone()],
+            ..FontsConfig::default()
+        };
+        let err = named.build_database().unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::Error::NoFaces {
+                    path,
+                    reason: Some(crate::FontLoadFailureReason::MalformedFont),
+                } if *path == not_a_font
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            format!("no font faces in {}: malformed font", not_a_font.display())
+        );
+    }
+
+    /// Runs `build` and returns what it logs, as the binaries' subscriber
+    /// formats it.
+    fn logged_by(build: impl FnOnce()) -> String {
+        use std::sync::{Arc, Mutex};
+
+        struct Log(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Log {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let mut log = self
+                    .0
+                    .lock()
+                    .map_err(|_poisoned| std::io::ErrorKind::Other)?;
+                log.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::clone(&log);
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || Log(Arc::clone(&writer)))
+            .finish();
+        tracing::subscriber::with_default(subscriber, build);
+        let bytes = log.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    /// A file a directory load cannot load is logged as a warning that names
+    /// it. A named file that gives no face is the error, and is not logged as
+    /// well.
+    #[test]
+    fn a_failure_is_logged_as_a_warning_unless_it_is_the_error() {
+        let dir = dir_with_a_file_that_is_not_a_font();
+        let not_a_font = dir.path().join("not-a-font.ttf");
+        let warning = format!(
+            "cannot load face 0 of {}: malformed font",
+            not_a_font.display()
+        );
+
+        let in_a_dir = FontsConfig {
+            system: false,
+            dirs: vec![dir.path().to_path_buf()],
+            ..FontsConfig::default()
+        };
+        let dir_log = logged_by(|| {
+            in_a_dir.build_database().unwrap();
+        });
+        assert!(
+            dir_log.contains("WARN") && dir_log.contains(&warning),
+            "{dir_log}"
+        );
+
+        let named = FontsConfig {
+            system: false,
+            files: vec![not_a_font],
+            ..FontsConfig::default()
+        };
+        let named_log = logged_by(|| {
+            named.build_database().unwrap_err();
+        });
+        assert_eq!(named_log, "");
+    }
+
+    /// The directory load meets the file first and skips it with a warning;
+    /// naming the file is still an error, with the reason.
+    #[test]
+    fn a_named_file_that_its_dir_could_not_load_is_still_an_error() {
+        let dir = dir_with_a_file_that_is_not_a_font();
+        let not_a_font = dir.path().join("not-a-font.ttf");
+        let config = FontsConfig {
+            system: false,
+            dirs: vec![dir.path().to_path_buf()],
+            files: vec![not_a_font.clone()],
+            ..FontsConfig::default()
+        };
+        let err = config.build_database().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("no font faces in {}: malformed font", not_a_font.display())
+        );
+    }
+
+    /// A named file that adds no face because it is already loaded is not an
+    /// error: its directory loaded it, or it is named twice.
+    #[test]
+    fn a_named_file_that_is_already_loaded_is_not_an_error() {
+        let dir = dir_with_a_file_that_is_not_a_font();
+        let font = dir.path().join("Tuffy.ttf");
+        let config = FontsConfig {
+            system: false,
+            dirs: vec![dir.path().to_path_buf()],
+            files: vec![font.clone(), font],
+            ..FontsConfig::default()
+        };
+        assert_eq!(config.build_database().unwrap().len(), 1);
+
+        let mut twice = tuffy_only();
+        twice.files.extend(tuffy_only().files);
+        assert_eq!(twice.build_database().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn generic_names_resolve_through_the_configured_families() {
+        let mut config = tuffy_only();
+        assert_eq!(
+            FontQuery::new(vec!["serif".into()]).run(&config.build_database().unwrap()),
+            Err(QueryError::NoMatch(vec!["serif".into()]))
+        );
+        config.generic = GenericFamilies {
+            serif: Some("Tuffy".into()),
+            sans_serif: Some("Tuffy".into()),
+            cursive: Some("Tuffy".into()),
+            fantasy: Some("Tuffy".into()),
+            monospace: Some("Tuffy".into()),
+        };
+        let database = config.build_database().unwrap();
+        for generic in ["serif", "SANS-SERIF", "Cursive", "fantasy", "monospace"] {
+            let face = FontQuery::new(vec![generic.into()]).run(&database);
+            assert_eq!(
+                face.map(|face| face.family).as_deref(),
+                Ok("Tuffy"),
+                "{generic}"
+            );
+        }
     }
 }

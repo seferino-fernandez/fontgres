@@ -62,12 +62,16 @@
 //!   iOS and Android, reads the font directories and generic families from
 //!   fontconfig's configuration. Without it, system fonts load from a fixed
 //!   list of directories, which misses the fonts on systems such as NixOS.
-//! - `cli`: the `config`, `models`, `error` and `cli` modules, which the
-//!   `fontgres` binaries share, and the typed parsers of the `env` module.
-//!   [`Style`] and [`Stretch`] are read and written as CSS keywords, by serde
-//!   and as command-line values.
+//! - `serde`: the `models` module, with the serializable `Face` view, the
+//!   face and family listings and the `FontQuery` both binaries read.
+//!   [`Style`] and [`Stretch`] are read and written as CSS keywords by
+//!   serde. Implies `fs`, and adds only serde.
+//! - `cli`: the `config`, `error` and `cli` modules, which the `fontgres`
+//!   binaries share, and the typed parsers of the `env` module. [`Style`]
+//!   and [`Stretch`] are read as CSS keywords on the command line. Implies
+//!   `serde`.
 //! - `schema`: derives `schemars::JsonSchema` on the `models` views and
-//!   query, and on [`Style`] and [`Stretch`]. Implies `cli`.
+//!   query, and on [`Style`] and [`Stretch`]. Implies `serde`.
 //!
 //! # Failures and logging
 //!
@@ -95,16 +99,19 @@
 //! [ttf-parser]: https://github.com/harfbuzz/ttf-parser
 
 #![cfg_attr(not(feature = "std"), no_std)]
-// The module map links to items that exist only under the `cli` feature, so
-// it is part of the crate docs only when they are.
+// The module map links to items that exist only under the `serde` and `cli`
+// features, so each entry is part of the crate docs only when its items are.
+#![cfg_attr(
+    feature = "serde",
+    doc = "\n# Modules\n\n\
+- [`models`]: the serializable [`models::Face`] view, [`models::FontQuery`] \
+and the face and family listings.\n"
+)]
 #![cfg_attr(
     feature = "cli",
-    doc = "\n# Modules\n\n\
-- [`config`]: layered configuration (CLI flags, `FONTGRES_*` environment \
-variables, `config.toml`, defaults) for which fonts to load and how to log.\n\
-- [`models`]: [`FontsConfig::build_database`], the serializable \
-[`models::Face`] view, [`models::FontQuery`] and the face and family \
-listings.\n\
+    doc = "- [`config`]: layered configuration (CLI flags, `FONTGRES_*` \
+environment variables, `config.toml`, defaults) for which fonts to load and \
+how to log, and [`FontsConfig::build_database`], which loads them.\n\
 - [`env`](mod@env): the environment-variable source the configuration reads \
 through, and its typed parsers.\n\
 - [`error`]: [`Error`] and [`ConfigError`].\n\
@@ -117,16 +124,17 @@ extern crate alloc;
 
 /// Declares an enum of CSS keywords, such as `semi-condensed`.
 ///
-/// With the `cli` feature the enum is read and written as its keyword, by
-/// serde and as a command-line value. With the `schema` feature it has a JSON
-/// schema.
+/// With the `serde` feature serde reads and writes the enum as its keyword,
+/// and with the `cli` feature so does the command line. With the `schema`
+/// feature it has a JSON schema.
 macro_rules! css_keywords {
     ($(#[$attribute:meta])* $visibility:vis enum $name:ident { $($variants:tt)* }) => {
         #[cfg_attr(
-            feature = "cli",
-            derive(serde::Serialize, serde::Deserialize, clap::ValueEnum),
+            feature = "serde",
+            derive(serde::Serialize, serde::Deserialize),
             serde(rename_all = "kebab-case")
         )]
+        #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         $(#[$attribute])*
         $visibility enum $name { $($variants)* }
@@ -1406,8 +1414,8 @@ impl Weight {
 css_keywords! {
     /// The slant of a face, as the CSS `font-style`.
     ///
-    /// With the `cli` feature it is read and written as its CSS keyword, by
-    /// serde and as a command-line value.
+    /// With the `serde` feature serde reads and writes it as its CSS keyword,
+    /// and with the `cli` feature so does the command line.
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
     #[cfg_attr(
         feature = "schema",
@@ -1549,8 +1557,9 @@ mod postscript_name;
 #[cfg(feature = "fs")]
 mod system_fonts;
 
-// fontgres additions: configuration and CLI helpers shared by the workspace
-// binaries. They need `std`, so they sit behind the `cli` feature.
+// fontgres additions: the serializable views and query, behind the `serde`
+// feature, and the configuration and CLI helpers shared by the workspace
+// binaries, behind the `cli` feature.
 
 #[cfg(feature = "cli")]
 pub mod cli;
@@ -1558,7 +1567,7 @@ pub mod cli;
 pub mod config;
 #[cfg(feature = "cli")]
 pub mod error;
-#[cfg(feature = "cli")]
+#[cfg(feature = "serde")]
 pub mod models;
 
 #[cfg(feature = "cli")]

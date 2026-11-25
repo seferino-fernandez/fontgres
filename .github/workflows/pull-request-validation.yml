@@ -47,8 +47,14 @@ jobs:
             - name: Run tests (default features)
               run: cargo nextest run --locked --workspace
 
+            - name: Run fontgres-core tests with serde and without cli
+              run: cargo nextest run --locked -p fontgres-core --all-targets --no-default-features --features serde
+
             - name: Run doc tests
               run: cargo test --locked --workspace --doc
+
+            - name: Run fontgres-core doc tests with serde and without cli
+              run: cargo test --locked --doc -p fontgres-core --no-default-features --features serde
 
             - name: Build docs
               run: cargo doc --locked --workspace --no-deps --all-features
@@ -78,6 +84,9 @@ jobs:
                   cargo clippy --locked -p fontgres-core --all-targets --no-default-features -- -D warnings
                   cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std -- -D warnings
                   cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std,fs -- -D warnings
+                  cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features serde -- -D warnings
+                  cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features schema -- -D warnings
+                  cargo clippy --locked -p fontgres-core --all-targets --features serde -- -D warnings
 
     # Dependency policy (deny.toml) and unused dependencies.
     dependencies:

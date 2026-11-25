@@ -33,7 +33,7 @@ pub(crate) fn faces(
     args: &FacesArgs,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let faces: Vec<Face> = models::faces(database, args.family.as_deref())
+    let faces: Vec<Face<'_>> = models::faces(database, args.family.as_deref())
         .into_iter()
         .map(Face::from)
         .collect();
@@ -61,20 +61,19 @@ pub(crate) fn query(
 }
 
 /// One table or CSV row per face, in [`FACE_HEADERS`] order.
-fn face_rows(faces: &[Face]) -> Vec<Vec<String>> {
+fn face_rows(faces: &[Face<'_>]) -> Vec<Vec<String>> {
     faces
         .iter()
         .map(|face| {
             vec![
-                face.family.clone(),
-                face.subfamily.clone(),
-                face.post_script_name.clone(),
+                face.family.to_owned(),
+                face.subfamily.to_owned(),
+                face.post_script_name.to_owned(),
                 face.weight.to_string(),
                 keyword(&face.style),
                 keyword(&face.stretch),
                 face.monospaced.to_string(),
                 face.path
-                    .as_ref()
                     .map_or_else(String::new, |path| path.display().to_string()),
                 face.index.to_string(),
             ]
@@ -93,7 +92,7 @@ fn keyword(value: &impl serde::Serialize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fontgres_core::{Stretch, Style};
+    use fontgres_core::{Language, Stretch, Style};
 
     #[test]
     fn keyword_is_the_css_name() {
@@ -103,11 +102,12 @@ mod tests {
 
     #[test]
     fn face_rows_follow_the_headers() {
+        let families = [("Tuffy".to_owned(), Language::English_UnitedStates)];
         let face = Face {
-            family: "Tuffy".into(),
-            families: vec!["Tuffy".into()],
-            subfamily: "Bold Oblique".into(),
-            post_script_name: "Tuffy-Bold".into(),
+            family: "Tuffy",
+            families: &families,
+            subfamily: "Bold Oblique",
+            post_script_name: "Tuffy-Bold",
             style: Style::Oblique,
             weight: 700,
             stretch: Stretch::Condensed,

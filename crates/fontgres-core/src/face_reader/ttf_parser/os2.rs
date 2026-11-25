@@ -16,8 +16,9 @@ css_keywords! {
     /// [`usWidthClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
     /// The variants are ordered from narrowest to widest.
     ///
-    /// With the `cli` feature it is read and written as its CSS keyword, such as
-    /// `semi-condensed`, by serde and as a command-line value.
+    /// With the `serde` feature serde reads and writes it as its CSS keyword,
+    /// such as `semi-condensed`, and with the `cli` feature so does the
+    /// command line.
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
     #[cfg_attr(
         feature = "schema",
