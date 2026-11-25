@@ -35,7 +35,7 @@ cargo test
 ## Checks
 
 `just verify` runs what CI runs: formatting, the Clippy lints, the tests with
-all features and with the defaults, the docs build, the dependency policy,
+all features, with the defaults and with `fontgres-core`'s `serde` feature alone, the docs build, the dependency policy,
 spelling, TOML style and the ast-grep rules. A change is ready when it passes.
 [docs/quality-guardrails.md](docs/quality-guardrails.md) lists each tool and
 what it catches.

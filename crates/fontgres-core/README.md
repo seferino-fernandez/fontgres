@@ -49,9 +49,43 @@ if let Some(face) = db.query(&query) {
 }
 ```
 
-Cargo features: `std`, `fs`, `memmap` (memory-maps font files while
-parsing) and `fontconfig` (reads fontconfig's directory list on Linux), all
-on by default.
+## Cargo features
+
+The defaults give the font database and nothing else. Turn on `serde` to
+serialize what it holds, as an app that shows fonts in its UI does; `cli`
+and `schema` are for the `fontgres` binaries.
+
+| Feature | Default | What it adds | Crates it adds |
+| --- | --- | --- | --- |
+| `std` | yes | Links the standard library. Without it the crate is `no_std` with `alloc` and loads fonts only from memory. | none |
+| `fs` | yes | Loading font files, directories and the system's fonts, and the `env` module. Implies `std`. | none |
+| `memmap` | yes | Memory-maps font files while reading them instead of copying them into memory. Implies `fs`. | `memmap2` |
+| `fontconfig` | yes | On Linux and the other Unix systems except macOS, iOS and Android, reads the font directories and generic families from fontconfig's configuration. Implies `fs`. | `fontconfig-parser`, on those systems |
+| `serde` | no | The `models` module: the serializable `Face` view, the face and family listings in the binaries' order, and `FontQuery`. `Style` and `Stretch` serialize as CSS keywords. Implies `fs`. | `serde` |
+| `cli` | no | What the binaries share (below), and `Style` and `Stretch` as command-line values. Implies `serde`. | `clap` and its completion and man-page crates, `dirs`, `thiserror`, `toml`, `tracing`, `tracing-subscriber` |
+| `schema` | no | `schemars::JsonSchema` on the `models` views and query, `Style` and `Stretch`, for MCP tool schemas. Implies `serde`. | `schemars` |
+
+With `serde`, list the faces as JSON and run a query:
+
+```toml
+[dependencies]
+fontgres-core = { version = "0.4", features = ["serde"] }
+```
+
+```rust
+use fontgres_core::Database;
+use fontgres_core::models::{Face, FontQuery, faces};
+
+let mut db = Database::new();
+let _report = db.load_system_fonts();
+let listing: Vec<Face<'_>> = faces(&db, None).into_iter().map(Face::from).collect();
+let json = serde_json::to_string(&listing)?;
+let best = FontQuery::new(vec!["sans-serif".into()]).run(&db);
+```
+
+A `Face` borrows from the database, so building the listing copies no
+names. A `Database` is `Send` and `Sync`: load it once and share it
+across threads.
 
 ## What the binaries share
 
@@ -62,18 +96,15 @@ The `cli` feature adds what the CLI and MCP server have in common:
   generic families (`[fonts.generic]`) and logging (`[log]`). A bad env value,
   a missing or unreadable `--config`/`FONTGRES_CONFIG` file, invalid TOML and a
   key or table the file does not expect are each an error naming its source.
-- `models`: `FontsConfig::build_database`, which fails on a font directory it
-  cannot read and on a named font file that gives no face, and logs a warning
-  for any other file or face it cannot load; the serializable `Face` view with
-  CSS keywords for style and stretch, `FontQuery`, the one query both
-  binaries read (CSS generic names resolve through the configured families),
-  and the face and family listings.
+  `FontsConfig::build_database` loads the fonts a configuration names: it fails
+  on a font directory it cannot read and on a named font file that gives no
+  face, and logs a warning for any other file or face it cannot load.
 - `cli`: what the binaries do the same way at startup: the flags they share,
   the `completions` and `man` subcommands, the one configuration load, and
   the logging setup.
 
-The `schema` feature derives `schemars::JsonSchema` on the views, the query,
-`Style` and `Stretch` for MCP tool schemas.
+Both binaries read their query as `models::FontQuery`, so CSS generic names
+resolve through the configured families in each.
 
 ## Logging
 

@@ -6,10 +6,10 @@ What checks this project, and what each check is for. `just verify` runs everyth
 | --- | --- | --- | --- |
 | rustfmt (`rustfmt.toml`) | One code format | `cargo fmt --all --check` | `lint` job |
 | Clippy (`[workspace.lints]`, `clippy.toml`) | Strict lints: the pedantic group, no panicking shortcuts (`unwrap`, indexing, `todo!`), no silent `#[allow]`, and size and complexity budgets per function | `just lint` | `lint` job |
-| Clippy on `fontgres-core`'s reduced feature sets | Code behind `#[cfg(feature = …)]` stays lint-clean in the `no_std`, `std`-only and no-`memmap` builds | `just lint-features` | `lint` job |
+| Clippy on `fontgres-core`'s reduced feature sets | Code behind `#[cfg(feature = …)]` stays lint-clean in the `no_std`, `std`-only and no-`memmap` builds, with `serde` or `schema` but not `cli`, and with the defaults plus `serde` | `just lint-features` | `lint` job |
 | `unsafe_code = "forbid"` | No `unsafe` in any workspace crate except `fontgres-core`, which sets it to `deny` so its one file-mapping call can carry `#[expect(unsafe_code)]` | part of Clippy and `cargo check` | `lint`, `test` jobs |
 | rustdoc (`[workspace.lints.rustdoc]`) | Docs build without broken links or warnings | `just doc` | `test` job |
-| cargo-nextest and doctests | Unit, integration and doc tests, with all features and with defaults | `just test` | `test` job |
+| cargo-nextest and doctests | Unit, integration and doc tests, with all features and with defaults; `fontgres-core`'s also with `serde` but not `cli`, so the views never come to need the CLI crates | `just test` | `test` job |
 | `rust-toolchain.toml` | The same pinned Rust locally and in CI; Dependabot bumps it | automatic | every job |
 | cargo-deny (`deny.toml`) | Known-vulnerable crates, allowed licenses, crates.io as the only source | `cargo deny check` | `dependencies` job |
 | cargo-shear | Unused dependencies | `cargo shear` | `dependencies` job |
