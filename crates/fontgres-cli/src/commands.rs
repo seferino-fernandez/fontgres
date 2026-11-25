@@ -70,8 +70,8 @@ fn face_rows(faces: &[Face<'_>]) -> Vec<Vec<String>> {
                 face.subfamily.to_owned(),
                 face.post_script_name.to_owned(),
                 face.weight.to_string(),
-                keyword(&face.style),
-                keyword(&face.stretch),
+                face.style.css_name().to_owned(),
+                face.stretch.css_name().to_owned(),
                 face.monospaced.to_string(),
                 face.path
                     .map_or_else(String::new, |path| path.display().to_string()),
@@ -81,24 +81,10 @@ fn face_rows(faces: &[Face<'_>]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The CSS keyword `value` serializes as, such as `semi-condensed`.
-fn keyword(value: &impl serde::Serialize) -> String {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(keyword)) => keyword,
-        Ok(_) | Err(_) => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use fontgres_core::{Language, Stretch, Style};
-
-    #[test]
-    fn keyword_is_the_css_name() {
-        assert_eq!(keyword(&Stretch::ExtraCondensed), "extra-condensed");
-        assert_eq!(keyword(&Style::Italic), "italic");
-    }
 
     #[test]
     fn face_rows_follow_the_headers() {

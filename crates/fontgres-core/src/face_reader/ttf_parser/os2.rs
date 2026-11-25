@@ -66,6 +66,25 @@ impl Width {
             Width::UltraExpanded => 9,
         }
     }
+
+    /// Returns the width's CSS keyword, from `ultra-condensed` to
+    /// `ultra-expanded`.
+    ///
+    /// It is the keyword serde reads and writes with the `serde` feature.
+    #[inline]
+    pub const fn css_name(self) -> &'static str {
+        match self {
+            Width::UltraCondensed => "ultra-condensed",
+            Width::ExtraCondensed => "extra-condensed",
+            Width::Condensed => "condensed",
+            Width::SemiCondensed => "semi-condensed",
+            Width::Normal => "normal",
+            Width::SemiExpanded => "semi-expanded",
+            Width::Expanded => "expanded",
+            Width::ExtraExpanded => "extra-expanded",
+            Width::UltraExpanded => "ultra-expanded",
+        }
+    }
 }
 
 impl Default for Width {

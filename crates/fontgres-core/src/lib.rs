@@ -1438,6 +1438,20 @@ impl Default for Style {
     }
 }
 
+impl Style {
+    /// Returns the style's CSS keyword: `normal`, `italic` or `oblique`.
+    ///
+    /// It is the keyword serde reads and writes with the `serde` feature.
+    #[inline]
+    pub const fn css_name(self) -> &'static str {
+        match self {
+            Style::Normal => "normal",
+            Style::Italic => "italic",
+            Style::Oblique => "oblique",
+        }
+    }
+}
+
 // Based on https://github.com/servo/font-kit
 /// Returns the face CSS font matching picks from one family's `candidates`,
 /// or `None` when there are none.
