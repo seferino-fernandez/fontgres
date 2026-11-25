@@ -19,11 +19,8 @@ use std::num::NonZeroUsize;
 
 use rmcp::{
     ErrorData as McpError,
-    handler::server::{
-        tool::schema_for_output,
-        wrapper::{Json, Parameters},
-    },
-    model::CallToolResult,
+    handler::server::{tool::schema_for_output, wrapper::Parameters},
+    model::{CallToolResult, ContentBlock},
     tool, tool_router,
 };
 use schemars::JsonSchema;
@@ -83,7 +80,7 @@ impl FontTools {
     #[tool(
         name = "fontgres_list_faces",
         description = "List the loaded font faces a page at a time, optionally only one family",
-        output_schema = schema_for_output::<Page<'static, Face>>(),
+        output_schema = schema_for_output::<Page<'static, Face<'static>>>(),
         annotations(
             title = "List font faces",
             read_only_hint = true,
@@ -122,9 +119,12 @@ impl FontTools {
         self.page(&names, params.offset, params.limit, |name| *name)
     }
 
+    // The result is built here rather than returned as `Json<Face>`: rmcp's
+    // `Json` needs a `'static` value, and the face borrows the database.
     #[tool(
         name = "fontgres_query_font",
         description = "Find the face that best matches a CSS-like font query",
+        output_schema = schema_for_output::<Face<'static>>(),
         annotations(
             title = "Query a font",
             read_only_hint = true,
@@ -136,16 +136,22 @@ impl FontTools {
     async fn query_font(
         &self,
         Parameters(query): Parameters<FontQuery>,
-    ) -> Result<Json<Face>, String> {
-        query
-            .run(&self.database)
-            .map(Json)
-            .map_err(|error| match error {
-                QueryError::NoMatch(_) => {
-                    format!("{error}; use fontgres_list_families to see the loaded families")
-                }
-                QueryError::NoFamilies | QueryError::WeightOutOfRange(_) => error.to_string(),
-            })
+    ) -> Result<CallToolResult, McpError> {
+        let face = match query.run(&self.database) {
+            Ok(face) => face,
+            Err(error) => {
+                let message = match error {
+                    QueryError::NoMatch(_) => {
+                        format!("{error}; use fontgres_list_families to see the loaded families")
+                    }
+                    QueryError::NoFamilies | QueryError::WeightOutOfRange(_) => error.to_string(),
+                };
+                return Ok(CallToolResult::error(vec![ContentBlock::text(message)]));
+            }
+        };
+        serde_json::to_value(face)
+            .map(CallToolResult::structured)
+            .map_err(|_error| McpError::internal_error("failed to serialize tool response", None))
     }
 }
 

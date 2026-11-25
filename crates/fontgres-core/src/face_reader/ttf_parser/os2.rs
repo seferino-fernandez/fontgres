@@ -16,8 +16,9 @@ css_keywords! {
     /// [`usWidthClass`](https://docs.microsoft.com/en-us/typography/opentype/spec/os2#uswidthclass).
     /// The variants are ordered from narrowest to widest.
     ///
-    /// With the `cli` feature it is read and written as its CSS keyword, such as
-    /// `semi-condensed`, by serde and as a command-line value.
+    /// With the `serde` feature serde reads and writes it as its CSS keyword,
+    /// such as `semi-condensed`, and with the `cli` feature so does the
+    /// command line.
     #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
     #[cfg_attr(
         feature = "schema",
@@ -63,6 +64,25 @@ impl Width {
             Width::Expanded => 7,
             Width::ExtraExpanded => 8,
             Width::UltraExpanded => 9,
+        }
+    }
+
+    /// Returns the width's CSS keyword, from `ultra-condensed` to
+    /// `ultra-expanded`.
+    ///
+    /// It is the keyword serde reads and writes with the `serde` feature.
+    #[inline]
+    pub const fn css_name(self) -> &'static str {
+        match self {
+            Width::UltraCondensed => "ultra-condensed",
+            Width::ExtraCondensed => "extra-condensed",
+            Width::Condensed => "condensed",
+            Width::SemiCondensed => "semi-condensed",
+            Width::Normal => "normal",
+            Width::SemiExpanded => "semi-expanded",
+            Width::Expanded => "expanded",
+            Width::ExtraExpanded => "extra-expanded",
+            Width::UltraExpanded => "ultra-expanded",
         }
     }
 }

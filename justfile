@@ -31,11 +31,13 @@ mutants-diff:
 dupes:
 	npx --yes jscpd@5.4.3 --baseline-from-ref origin/main --fail-on-new-clones=0 crates
 
-# Run all tests: full feature matrix, default features, and doctests
+# Run all tests: full feature matrix, default features, fontgres-core's serde feature without cli, and doctests
 test:
 	cargo nextest run --all-targets --all-features
 	cargo nextest run
+	cargo nextest run -p fontgres-core --all-targets --no-default-features --features serde
 	cargo test --doc
+	cargo test --doc -p fontgres-core --no-default-features --features serde
 
 # Build API docs, failing on rustdoc warnings
 doc:
@@ -45,11 +47,14 @@ doc:
 lint:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-# Lint fontgres-core with its optional features off: no_std, std only, and std with fs but no memmap
+# Lint fontgres-core with its optional features off: no_std, std only, std with fs but no memmap, serde and schema without cli, and the defaults with serde
 lint-features:
 	cargo clippy --locked -p fontgres-core --all-targets --no-default-features -- -D warnings
 	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std -- -D warnings
 	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features std,fs -- -D warnings
+	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features serde -- -D warnings
+	cargo clippy --locked -p fontgres-core --all-targets --no-default-features --features schema -- -D warnings
+	cargo clippy --locked -p fontgres-core --all-targets --features serde -- -D warnings
 
 # Format code with rustfmt and apply Clippy's auto-fixable suggestions
 format:

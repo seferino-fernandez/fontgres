@@ -23,19 +23,22 @@ memmap = ["fs", "dep:memmap2"]
 # Enables minimal fontconfig support on Linux.
 # Must be enabled for NixOS, otherwise no fonts will be loaded.
 fontconfig = ["dep:fontconfig-parser", "fs"]
-# Configuration loading, the font views and query, and the `completions`/`man`
-# subcommand helpers shared by the workspace binaries, with `Style` and
-# `Stretch` read and written as CSS keywords. Off by default so library users
-# get only the font database.
+# The serializable font views, listings and query of the `models` module,
+# with `Style` and `Stretch` read and written as CSS keywords by serde. Adds
+# no dependency but serde.
+serde = ["fs", "dep:serde"]
+# Configuration loading, logging and the `completions`/`man` subcommand
+# helpers shared by the workspace binaries, with `Style` and `Stretch` read
+# as CSS keywords on the command line. Off by default, as is `serde`, so
+# library users get only the font database.
 cli = [
-  "fs",
+  "serde",
   "dep:clap",
   "dep:clap-verbosity-flag",
   "dep:clap_complete",
   "dep:clap_complete_nushell",
   "dep:clap_mangen",
   "dep:dirs",
-  "dep:serde",
   "dep:thiserror",
   "dep:toml",
   "dep:tracing",
@@ -43,7 +46,7 @@ cli = [
 ]
 # Derive `schemars::JsonSchema` on the font views, the query, `Style` and
 # `Stretch` so MCP consumers can advertise tool schemas.
-schema = ["cli", "dep:schemars"]
+schema = ["serde", "dep:schemars"]
 
 [dependencies]
 log.workspace = true
