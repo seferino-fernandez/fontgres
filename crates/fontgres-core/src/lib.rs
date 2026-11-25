@@ -392,6 +392,12 @@ impl core::fmt::Display for FontLoadFailureReason {
 /// load, with the reason. A load neither logs these failures nor stops at
 /// one; the report is the only place they appear.
 ///
+/// # Threads
+///
+/// A `Database` is `Send` and `Sync`, so one loaded database can be shared
+/// across threads, such as an app's request handlers, behind an `Arc` or a
+/// lock.
+///
 /// [`load_fonts_dir`]: Database::load_fonts_dir
 /// [`load_system_fonts`]: Database::load_system_fonts
 /// [`load_font_file`]: Database::load_font_file
@@ -411,6 +417,13 @@ pub struct Database {
     #[cfg(feature = "fs")]
     loaded_files: std::collections::HashMap<std::path::PathBuf, bool>,
 }
+
+// The docs promise a database can be shared across threads; this fails the
+// build when a field would break that promise.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Database>();
+};
 
 impl Default for Database {
     fn default() -> Self {
